@@ -1,0 +1,111 @@
+// astream web viewer: renders a live PTY stream and forwards keystrokes.
+//
+// The wire protocol mirrors internal/wire: each WebSocket binary message is a
+// single frame whose first byte is the kind, followed by the payload.
+//   0 = Output  (PTY bytes to render)
+//   1 = Input   (keystroke bytes to send)
+//   2 = Resize  (uint16 cols, uint16 rows, big-endian)
+const KIND_OUTPUT = 0;
+const KIND_INPUT = 1;
+const KIND_RESIZE = 2;
+
+const statusEl = document.getElementById("status");
+const statusText = document.getElementById("status-text");
+const TERMINAL_FONT =
+  '"JetBrains Mono", "Symbols Nerd Font Mono", "JetBrainsMono Nerd Font", "JetBrainsMonoNL Nerd Font", "Symbols Nerd Font", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+
+function setStatus(text, live) {
+  statusText.textContent = text;
+  statusEl.classList.toggle("live", Boolean(live));
+}
+
+const term = new Terminal({
+  cursorBlink: true,
+  fontFamily: TERMINAL_FONT,
+  fontSize: 14,
+  theme: { background: "#0b0e14", foreground: "#c8d3f5" },
+});
+const fitEl = document.getElementById("fit");
+const termEl = document.getElementById("terminal");
+term.open(termEl);
+if (document.fonts) {
+  document.fonts.ready.then(() => {
+    term.options.fontFamily = TERMINAL_FONT;
+    term.refresh(0, term.rows - 1);
+    fitFontToTab();
+  });
+}
+
+// The viewer keeps the broadcaster's exact grid (so wrapping matches the
+// source) and sizes the font so the whole grid fits inside the terminal pane.
+// Fitting against both width and height guarantees nothing overflows or hides
+// behind the bottom status line. The grid sits at the top-left like a normal
+// terminal window.
+const MIN_FONT = 4;
+
+function fitFontToTab() {
+  const gridW = termEl.offsetWidth;
+  const gridH = termEl.offsetHeight;
+  if (!gridW || !gridH) return;
+  const current = term.options.fontSize;
+  const factor = Math.min(fitEl.clientWidth / gridW, fitEl.clientHeight / gridH);
+  const next = Math.max(MIN_FONT, current * factor);
+  if (Math.abs(next - current) > 0.1) {
+    term.options.fontSize = next;
+  }
+}
+
+window.addEventListener("resize", fitFontToTab);
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", fitFontToTab);
+}
+
+// The broadcaster owns the terminal size; the viewer only mirrors it.
+const encoder = new TextEncoder();
+function sendInput(data) {
+  const bytes = encoder.encode(data);
+  const frame = new Uint8Array(1 + bytes.length);
+  frame[0] = KIND_INPUT;
+  frame.set(bytes, 1);
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(frame);
+  }
+}
+term.onData(sendInput);
+
+function handleFrame(buffer) {
+  const view = new DataView(buffer);
+  const kind = view.getUint8(0);
+  if (kind === KIND_OUTPUT) {
+    term.write(new Uint8Array(buffer, 1));
+  } else if (kind === KIND_RESIZE) {
+    const cols = view.getUint16(1, false);
+    const rows = view.getUint16(3, false);
+    if (cols > 0 && rows > 0) {
+      term.resize(cols, rows);
+      requestAnimationFrame(fitFontToTab);
+    }
+  }
+}
+
+const sessionId = location.pathname.split("/").pop();
+const wsScheme = location.protocol === "https:" ? "wss" : "ws";
+const wsURL = `${wsScheme}://${location.host}/ws/${sessionId}/view`;
+
+let socket;
+function connect() {
+  setStatus("connecting...", false);
+  socket = new WebSocket(wsURL);
+  socket.binaryType = "arraybuffer";
+
+  socket.onopen = () => setStatus("live", true);
+  socket.onmessage = (event) => handleFrame(event.data);
+  socket.onclose = () => {
+    setStatus("disconnected - retrying...", false);
+    setTimeout(connect, 1500);
+  };
+  socket.onerror = () => socket.close();
+}
+
+connect();
+term.focus();
