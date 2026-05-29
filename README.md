@@ -141,9 +141,7 @@ different hostname? Change `name` in `wrangler.toml`.
 
 ## How private is this?
 
-Worth being clear about, since you're sharing a live shell.
-
-The link is the credential. Each session has two random tokens: the id, which is
+Each session has two random tokens: the id, which is
 the view-only link, and a control key, which makes a link read-write. Whoever
 holds a link has exactly that link's access, so only send a link to someone you
 trust with that level of access.
