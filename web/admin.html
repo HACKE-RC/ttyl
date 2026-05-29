@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ttyl - dashboard</title>
+  <style>
+    /* No third-party fonts or assets; the dashboard loads only from this
+       origin, matching the viewer page's strict CSP. */
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background: #0b0e14;
+      color: #c8d3f5;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 14px;
+    }
+    body { padding: 24px; box-sizing: border-box; }
+    h1 { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+    .sub { color: #8f9bb3; font-size: 12px; margin-bottom: 20px; }
+    .bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    button {
+      font-family: inherit;
+      font-size: 13px;
+      padding: 7px 12px;
+      border: 1px solid #1b2230;
+      border-radius: 4px;
+      background: #11141c;
+      color: #c8d3f5;
+      cursor: pointer;
+    }
+    button:hover { border-color: #2a3346; }
+    button.danger { color: #f7768e; }
+    button.primary { background: #9ece6a; color: #0b0e14; border-color: #9ece6a; font-weight: 600; }
+    input[type="password"], input[type="text"] {
+      font-family: inherit;
+      font-size: 13px;
+      padding: 7px 10px;
+      border: 1px solid #1b2230;
+      border-radius: 4px;
+      background: #0b0e14;
+      color: #c8d3f5;
+    }
+    .pill {
+      font-size: 12px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1px solid #1b2230;
+      color: #8f9bb3;
+    }
+    .pill.on { color: #9ece6a; border-color: #2c3a26; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #1b2230; }
+    th { color: #8f9bb3; font-weight: 500; font-size: 12px; }
+    td.role-broadcaster { color: #7aa2f7; }
+    .empty { color: #8f9bb3; padding: 16px 10px; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #f7768e; margin-right: 8px; }
+    .dot.live { background: #9ece6a; }
+    #conn { color: #8f9bb3; font-size: 12px; margin-bottom: 16px; }
+  </style>
+</head>
+<body>
+  <h1><span id="dot" class="dot"></span>ttyl dashboard</h1>
+  <div class="sub">Manage who can connect to this terminal session.</div>
+  <div id="conn">connecting...</div>
+
+  <div class="bar">
+    <span id="lock-pill" class="pill">unlocked</span>
+    <button id="lock-btn">Lock new viewers</button>
+    <span id="pw-pill" class="pill">no password</span>
+    <input id="pw-input" type="password" placeholder="set a password" autocomplete="new-password" />
+    <button id="pw-set" class="primary">Set</button>
+    <button id="pw-clear">Clear</button>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>#</th><th>Role</th><th>Access</th><th>Joined</th><th>IP</th><th>Client</th><th></th></tr>
+    </thead>
+    <tbody id="roster"></tbody>
+  </table>
+
+  <script src="/static/admin.js"></script>
+</body>
+</html>

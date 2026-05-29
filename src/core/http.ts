@@ -4,7 +4,10 @@
 
 // Route patterns, identical on both targets.
 export const VIEWER_PATH = /^\/s\/([^/]+)$/;
-export const WS_PATH = /^\/ws\/([^/]+)\/(broadcast|view)$/;
+// The owner-only dashboard page lives at /admin/<id>; the admin control-plane
+// socket is the third WS role alongside the data-plane broadcast/view roles.
+export const ADMIN_PATH = /^\/admin\/([^/]+)$/;
+export const WS_PATH = /^\/ws\/([^/]+)\/(broadcast|view|admin)$/;
 
 // Content types we serve.
 export const CONTENT_TYPE = {

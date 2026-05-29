@@ -1,193 +1,167 @@
 # ttyl
 
-Share your terminal with a link.
+`ttyl` lets you stream your terminal session as a URL, with read-only or fully interactive access.
 
-`ttyl` lets you stream your terminal session as a URL, with read-only or full access.
+## Features
 
-What you get:
-
-- Viewers see output live and can type into the session.
-- Two link types: a view-only link for people who should just watch, and a
-  read-write link for people who should be able to drive.
-- Deploy it free to Cloudflare with one command, or run it as a plain server on
-  your own machine.
-- Links are unguessable, the control key never ends up in a URL or a log,
-  sessions expire on their own, and nothing is ever written to disk.
+- **Live Terminal Streaming**: Viewers can see terminal output in real time directly in their browser.
+- **Interactive Access**: Support for both view-only and read-write sessions.
+- **Session Management**: Built-in web dashboard and CLI console to manage connected viewers (kick clients, lock sessions).
+- **Access Control**: Optional password protection for sessions.
+- **Privacy by Design**: Control keys are passed via URL fragments and never logged. Sessions expire automatically and terminal output is never written to disk.
+- **Flexible Deployment**: Run your own relay server via Node.js or deploy seamlessly to Cloudflare Workers.
 
 ---
 
-## Quick start
+## Installation
 
-### 1. Install the CLI
+Install the CLI globally via npm:
 
 ```bash
 npm install -g @rcx86/ttyl
 ```
 
-That gives you the `ttyl` command (`stream`, `init`, and `serve`).
-
-### 2. Put up a relay
-
-You need a relay for viewers to connect to. Pick one; they behave the same.
-
-The simplest is to run one yourself with the CLI you just installed:
-
-```bash
-ttyl serve          # listens on http://0.0.0.0:8080
-```
-
-Put that behind HTTPS (Caddy or nginx is fine) so links work over `wss://`.
-
-Prefer something with nothing to maintain? Deploy the relay free to Cloudflare
-(clone this repo, then):
-
-```bash
-npm install
-npx wrangler login
-npm run deploy       # -> https://ttyl-relay.<you>.workers.dev
-```
-
-### 3. Share your terminal
-
-Tell the `ttyl` client where your relay is, once, then stream:
-
-```bash
-ttyl init -server https://ttyl-relay.<you>.workers.dev
-ttyl stream
-```
-
-#### View-only or read-write
-
-It prints two links:
-
-```
-ttyl: streaming live
-  read-write: https://.../s/<id>#<key>     <- watch AND type
-  view-only:  https://.../s/<id>           <- watch only
-```
-
-Send whoever you want the link that matches what they should be able to do. They
-open it in a browser and they're in.
-
-If you don't want anyone typing, hand out just the view-only link:
-
-```bash
-ttyl stream -view-only
-```
-
-#### Lifetime
-
-The session ends when you exit your shell. It also expires on its own after a
-while; set how long with `-lifetime`:
-
-```bash
-ttyl stream -lifetime 2d       # 30m, 6h, 8h, 2d, 1d12h, ...
-ttyl stream -lifetime never    # only ends when you disconnect
-```
-
-Without the flag, the relay's own default applies (8 hours).
-
-#### Saved server config
-
-`ttyl init` saves the server to a config file in your OS's usual spot
-(`~/.config/ttyl/` on Linux, `~/Library/Application Support/ttyl/` on
-macOS, `%AppData%\ttyl\` on Windows), so you only do it once. You can still
-pass `-server <url>` to any `stream` to override the saved value.
+This installs the `ttyl` executable, which provides the `stream`, `init`, `serve`, `admin`, and `links` commands.
 
 ---
 
-## Which relay should I run?
+## Relay Server Setup
 
-Both run the same code. Run your own with `ttyl serve` if you want everything on
-infrastructure you control; deploy to Cloudflare if you'd rather not maintain a
-box.
+A relay server is required to bridge the terminal broadcaster and the web viewers. You can deploy it using either of the following methods.
 
-|  | Your own server | Cloudflare Worker |
-| --- | --- | --- |
-| Setup | `ttyl serve` | clone repo + `npm run deploy` |
-| Where it runs | wherever you put it | Cloudflare's edge |
-| Cost | your server | free tier is plenty |
-| You maintain | the box and its HTTPS | nothing |
+### Option A: Self-Hosted Node.js Server
 
-### Your own server
+Run the relay locally or on your own infrastructure:
 
 ```bash
-ttyl serve                              # http://0.0.0.0:8080
-ttyl serve --port 9000 --host 127.0.0.1 # pick the port and host
-PORT=9000 HOST=127.0.0.1 ttyl serve     # or set them via env vars
+ttyl serve                              # Listens on http://0.0.0.0:8080
+ttyl serve --port 9000 --host 127.0.0.1 # Specify port and host
+PORT=9000 HOST=127.0.0.1 ttyl serve     # Configure via environment variables
 ```
 
-Put it behind a reverse proxy that terminates TLS so viewers connect over
-`https`/`wss`. When you do, set `TRUST_PROXY=1` so the rate limiter reads the
-real client IP from `X-Forwarded-For` (it ignores that header by default, since
-a direct listener can't trust it).
+*Note: When deploying behind a reverse proxy handling TLS, set `TRUST_PROXY=1` so the rate-limiter accurately evaluates the `X-Forwarded-For` header.*
 
-### Cloudflare
+### Option B: Cloudflare Worker
 
-Clone the repo (the Worker deploys from it). You need a Cloudflare account; the
-free plan works. Sign in once with `npx wrangler login`, or use a scoped API
-token instead:
+Deploy the relay to Cloudflare's edge network (requires a Cloudflare account):
 
 ```bash
-export CLOUDFLARE_API_TOKEN=...     # an "Edit Cloudflare Workers" token from the dashboard
-export CLOUDFLARE_ACCOUNT_ID=...
+git clone https://github.com/rcx86/ttyl.git
+cd ttyl
+npm install
+npx wrangler login
 npm run deploy
 ```
 
-The first deploy sets up a free `*.workers.dev` subdomain for you. Want a
-different hostname? Change `name` in `wrangler.toml`.
+This deploys the relay to a `*.workers.dev` subdomain (e.g., `https://ttyl-relay.<your-subdomain>.workers.dev`).
 
 ---
 
-## How private is this?
+## Usage
 
-Each session has two random tokens: the id, which is
-the view-only link, and a control key, which makes a link read-write. Whoever
-holds a link has exactly that link's access, so only send a link to someone you
-trust with that level of access.
+### Initialization
 
-A few things that make it safer than it might sound:
+Configure the CLI with your relay server URL. This saves the configuration to the user's configuration directory (e.g., `~/.config/ttyl/config.json`) so it doesn't need to be passed with every command.
 
-- The control key never goes in a URL the server sees. It lives in the link's
-  `#fragment`, which browsers don't send to the server, and it's handed over the
-  encrypted WebSocket instead. So it stays out of access logs, browser history,
-  and referrer headers.
-- View-only is actually view-only. The relay throws away a watcher's keystrokes;
-  that's enforced on the server, not just greyed out in the page.
-- Terminal output only ever lives in memory while the session is running. It's
-  never written to disk.
-- Sessions die on their own (8 hours by default) and end the instant you
-  disconnect. After that the links 404.
-- The viewer page loads everything from your own relay. No CDNs, no web fonts,
-  no analytics, no third-party anything.
+```bash
+ttyl init --server <relay-url>
+```
 
-What it deliberately doesn't have: accounts. There's no sign-in, no audit trail,
-and no way to kick one specific person off a shared link. If you need any of
-that, run it behind an identity proxy like Cloudflare Access.
+### Starting a Session
+
+Start broadcasting the current terminal session:
+
+```bash
+ttyl stream
+```
+
+By default, this generates three URLs:
+- **Read-Write**: Grants viewers the ability to watch and type.
+- **View-Only**: Grants viewers watch-only access.
+- **Dashboard**: Owner-only interface for managing the session.
+
+To create a strictly view-only session (where no interactive link is generated):
+
+```bash
+ttyl stream --view-only
+```
+
+### Session Lifetime
+
+Sessions terminate immediately upon shell exit. They also enforce a maximum lifetime duration (default: 8 hours). To specify a custom lifetime:
+
+```bash
+ttyl stream --lifetime 2d       # Accepts formats like 30m, 6h, 8h, 2d, 1d12h
+ttyl stream --lifetime never    # Disables automatic expiration
+```
 
 ---
 
-## Configuration
+## Session Management & Security
 
-| Setting | Where | Default |
+`ttyl` sessions include an optional management layer for access control and administration.
+
+### Dashboard & Admin Console
+
+The `dashboard:` URL provides an interface to view connected clients, kick viewers, lock the session to prevent new joins, and manage passwords.
+
+To access the management console from the CLI instead of the web:
+
+```bash
+ttyl admin '<dashboard-url>'
+# or manually passing the components:
+ttyl admin --id <id> --key <admin-key> --server <relay-url>
+```
+
+Available CLI commands within the admin console: `kick <#>`, `lock`, `unlock`, `password <value>`, `password clear`, `quit`.
+
+### Password Protection
+
+To require a password for all viewers (both view-only and read-write), initialize the stream with the `--password` flag. You will be prompted to enter the password interactively to prevent it from appearing in shell history:
+
+```bash
+ttyl stream --password
+```
+
+Passwords can also be set, updated, or removed dynamically via the dashboard or admin console. 
+
+*Note: `ttyl` does not utilize user accounts. If a session password is forgotten, there is no email reset flow. Password recovery is performed by clearing or resetting the password via the authenticated dashboard or admin console.*
+
+### Link Recovery
+
+Stream URLs are printed only once upon startup. To retrieve active session links later, open a separate terminal on the same machine and run:
+
+```bash
+ttyl links
+```
+
+This queries the running session via a local IPC socket to reprint the URLs securely without writing secrets to disk.
+
+---
+
+## Configuration Reference
+
+| Parameter | Configuration Method | Default |
 | --- | --- | --- |
-| Session lifetime (per stream) | `ttyl stream -lifetime <30m\|8h\|2d\|never>` | relay default |
-| Session lifetime (relay default) | `SESSION_TTL_SECONDS` (env or `wrangler.toml`) | 8 hours |
-| Sessions per IP | `[[ratelimits]]` in `wrangler.toml` (Worker) | 20 / minute |
-| Server port and host | `--port`/`--host` flags or `PORT`/`HOST` env | `0.0.0.0:8080` |
-| Trust `X-Forwarded-For` (Node, behind a proxy) | `TRUST_PROXY=1` env | off |
+| Session lifetime (client) | `ttyl stream --lifetime <duration>` | Relay default |
+| Session lifetime (server) | `SESSION_TTL_SECONDS` env var / `wrangler.toml` | 8 hours (28800) |
+| Session password | `ttyl stream --password` or Dashboard | None |
+| Dashboard / kick / lock | `dashboard:` link, or `ttyl admin <link>` | Per session |
+| Sessions per IP | `ratelimits` in `wrangler.toml` (Worker) | 20 / minute |
+| Server bind address | `--port`/`--host` flags or `PORT`/`HOST` env var | `0.0.0.0:8080` |
+| Proxy trust | `TRUST_PROXY=1` env var | Off |
 | Worker hostname | `name` in `wrangler.toml` | `ttyl-relay` |
 
 ---
 
-## Developing
+## Development
 
 ```bash
-npm run dev            # run the Cloudflare Worker locally
-npm run dev:node       # run the server locally with auto-reload
-npm test               # unit tests
-npm run typecheck      # type-check both targets
+npm run dev            # Run Cloudflare Worker locally
+npm run dev:node       # Run Node server locally with auto-reload
+npm test               # Run unit tests
+npm run typecheck      # Type-check all targets
 
-# end-to-end test against any running relay:
+# Run end-to-end tests against a running relay:
 node test/e2e.mjs http://127.0.0.1:8787
 ```

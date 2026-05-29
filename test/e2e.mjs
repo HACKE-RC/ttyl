@@ -37,8 +37,10 @@ function frameResize(cols, rows) {
   new DataView(b.buffer).setUint16(3, rows, false);
   return b;
 }
-function frameAuth(key) {
-  const d = te.encode(key);
+// The Auth frame payload is now a small JSON object { k?, p? }: the control key
+// and an optional session password. An empty object is a view-only viewer.
+function frameAuth(payload) {
+  const d = te.encode(JSON.stringify(payload ?? {}));
   const b = new Uint8Array(1 + d.length);
   b[0] = KIND_AUTH;
   b.set(d, 1);
@@ -54,17 +56,19 @@ function parse(buf) {
   return { kind, text: td.decode(b.subarray(1)) };
 }
 
-// open connects and, once open, sends the Auth handshake (auth = the control
-// key, "" for view-only, or null to skip). Tracks frames and the close code.
+// open connects and, once open, sends the Auth handshake (auth = an AuthPayload
+// object { k?, p? }, or null to skip). Tracks frames and the close code.
 function open(url, auth) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url);
     ws.binaryType = "arraybuffer";
     ws.frames = [];
     ws.closed = false;
+    ws.closeCode = null;
     ws.addEventListener("message", (e) => ws.frames.push(parse(e.data)));
-    ws.addEventListener("close", () => {
+    ws.addEventListener("close", (e) => {
       ws.closed = true;
+      ws.closeCode = e.code;
     });
     ws.addEventListener("open", () => {
       if (auth !== null && auth !== undefined) ws.send(frameAuth(auth));
@@ -72,6 +76,36 @@ function open(url, auth) {
     });
     ws.addEventListener("error", () => reject(new Error(`ws error: ${url}`)));
   });
+}
+
+// openAdmin connects to the control plane and sends the JSON hello. Collected
+// roster messages land in ws.rosters (newest last).
+function openAdmin(url, key) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url);
+    ws.rosters = [];
+    ws.closed = false;
+    ws.closeCode = null;
+    ws.addEventListener("message", (e) => {
+      if (typeof e.data === "string") {
+        const msg = JSON.parse(e.data);
+        if (msg.type === "roster") ws.rosters.push(msg);
+      }
+    });
+    ws.addEventListener("close", (e) => {
+      ws.closed = true;
+      ws.closeCode = e.code;
+    });
+    ws.addEventListener("open", () => {
+      if (key !== null) ws.send(JSON.stringify({ type: "hello", key }));
+      resolve(ws);
+    });
+    ws.addEventListener("error", () => reject(new Error(`ws error: ${url}`)));
+  });
+}
+
+function lastRoster(ws) {
+  return ws.rosters[ws.rosters.length - 1] ?? null;
 }
 
 function closedWithin(ws, ms) {
@@ -93,23 +127,24 @@ function check(name, cond) {
 async function main() {
   // 1. Create a session.
   const res = await fetch(`${BASE}/api/sessions`, { method: "POST" });
-  const { id, key } = await res.json();
+  const { id, key, admin: adminKey } = await res.json();
   check("create session returns 24-char id", typeof id === "string" && id.length === 24);
   check("create session returns a control key", typeof key === "string" && key.length === 24);
+  check("create session returns an admin key", typeof adminKey === "string" && adminKey.length === 24);
 
   // 1b. Broadcasting requires the control key via the Auth handshake; an empty
   // key is rejected and the socket is closed.
-  const badBcast = await open(`${WS_BASE}/ws/${id}/broadcast`, "");
+  const badBcast = await open(`${WS_BASE}/ws/${id}/broadcast`, {});
   check("broadcast with wrong/empty key is rejected", await closedWithin(badBcast, 1500));
 
   // 2. Broadcaster authenticates with the key; two read-write viewers join.
-  const b = await open(`${WS_BASE}/ws/${id}/broadcast`, key);
-  const v1 = await open(`${WS_BASE}/ws/${id}/view`, key);
-  const v2 = await open(`${WS_BASE}/ws/${id}/view`, key);
+  const b = await open(`${WS_BASE}/ws/${id}/broadcast`, { k: key });
+  const v1 = await open(`${WS_BASE}/ws/${id}/view`, { k: key });
+  const v2 = await open(`${WS_BASE}/ws/${id}/view`, { k: key });
   await sleep(200);
 
   // 2b. Only one broadcaster may be live: a second authed broadcaster is closed.
-  const b2 = await open(`${WS_BASE}/ws/${id}/broadcast`, key);
+  const b2 = await open(`${WS_BASE}/ws/${id}/broadcast`, { k: key });
   check("second broadcaster is rejected", await closedWithin(b2, 1500));
 
   // 3. Broadcaster sends resize + output; both viewers receive them.
@@ -140,8 +175,8 @@ async function main() {
   const v2InputCount = v2.frames.filter((f) => f.kind === KIND_INPUT).length;
   check("viewer input not echoed to other viewers", v2InputCount === 0);
 
-  // 4b. A VIEW-ONLY viewer (empty key) can watch but its input is dropped.
-  const ro = await open(`${WS_BASE}/ws/${id}/view`, "");
+  // 4b. A VIEW-ONLY viewer (empty payload) can watch but its input is dropped.
+  const ro = await open(`${WS_BASE}/ws/${id}/view`, {});
   await sleep(200);
   const roSeesOutput = ro.frames.some((f) => f.kind === KIND_OUTPUT && f.text.includes("hello world"));
   check("view-only viewer receives output", roSeesOutput);
@@ -155,7 +190,7 @@ async function main() {
   // 5. More output, then a LATE viewer joins and gets replay (resize + scrollback).
   b.send(frameOutput("line two\r\n"));
   await sleep(200);
-  const late = await open(`${WS_BASE}/ws/${id}/view`, "");
+  const late = await open(`${WS_BASE}/ws/${id}/view`, {});
   await sleep(250);
   const lateResize = late.frames.find((f) => f.kind === KIND_RESIZE);
   const lateOutput = late.frames.filter((f) => f.kind === KIND_OUTPUT).map((f) => f.text).join("");
@@ -167,6 +202,53 @@ async function main() {
   const liveCode = (await fetch(`${BASE}/s/${id}`)).status;
   check("viewer page 200 while live", liveCode === 200);
 
+  // 6b. Admin control plane: a wrong key is rejected; the right key gets a live
+  // roster, can kick a viewer, and can lock out new viewers.
+  const badAdmin = await openAdmin(`${WS_BASE}/ws/${id}/admin`, "WRONGADMINKEYWRONGADMINKE");
+  check("admin with wrong key is rejected", await closedWithin(badAdmin, 1500));
+
+  const admin = await openAdmin(`${WS_BASE}/ws/${id}/admin`, adminKey);
+  await sleep(200);
+  const roster = lastRoster(admin);
+  check("admin receives a roster", roster !== null);
+  check("roster shows the broadcaster present", roster?.hasBroadcaster === true);
+  check(
+    "roster lists the connected viewers",
+    (roster?.clients.filter((c) => c.role === "viewer").length ?? 0) >= 1,
+  );
+
+  // /admin/{id} page resolves while live.
+  const adminPageCode = (await fetch(`${BASE}/admin/${id}`)).status;
+  check("admin page 200 while live", adminPageCode === 200);
+
+  // Kick a freshly joined viewer and confirm it is closed with the kick code.
+  const victim = await open(`${WS_BASE}/ws/${id}/view`, {});
+  await sleep(200);
+  const victimEntry = lastRoster(admin)
+    .clients.filter((c) => c.role === "viewer")
+    .sort((x, y) => Number(y.id) - Number(x.id))[0];
+  admin.send(JSON.stringify({ type: "kick", id: victimEntry.id }));
+  check(
+    "kick closes the targeted viewer with code 4001",
+    (await closedWithin(victim, 1500)) && victim.closeCode === 4001,
+  );
+
+  // Lock the session; a new viewer is refused with the lock code; then unlock.
+  admin.send(JSON.stringify({ type: "lock" }));
+  await sleep(200);
+  const lockedOut = await open(`${WS_BASE}/ws/${id}/view`, {});
+  check(
+    "locked session refuses a new viewer with code 4002",
+    (await closedWithin(lockedOut, 1500)) && lockedOut.closeCode === 4002,
+  );
+  admin.send(JSON.stringify({ type: "unlock" }));
+  await sleep(200);
+  const afterUnlock = await open(`${WS_BASE}/ws/${id}/view`, {});
+  await sleep(200);
+  check("after unlock a new viewer is admitted again", !afterUnlock.closed);
+  try { admin.close(); } catch {}
+  try { afterUnlock.close(); } catch {}
+
   // 7. Broadcaster disconnects -> session ends, viewers closed, page 404s.
   const v1Closed = new Promise((r) => v1.addEventListener("close", () => r(true)));
   b.close();
@@ -175,6 +257,34 @@ async function main() {
   await sleep(200);
   const deadCode = (await fetch(`${BASE}/s/${id}`)).status;
   check("viewer page 404 after session ended", deadCode === 404);
+
+  // 7b. A password-protected session gates viewers: missing/wrong passwords are
+  // refused; the correct one is admitted; the broadcaster never needs it.
+  const pwRes = await fetch(`${BASE}/api/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password: "sw0rdfish" }),
+  });
+  const pw = await pwRes.json();
+  const pbc = await open(`${WS_BASE}/ws/${pw.id}/broadcast`, { k: pw.key });
+  await sleep(150);
+  check("password: broadcaster connects without the password", !pbc.closed);
+
+  const noPw = await open(`${WS_BASE}/ws/${pw.id}/view`, {});
+  check(
+    "password: viewer with no password refused (4003)",
+    (await closedWithin(noPw, 1500)) && noPw.closeCode === 4003,
+  );
+  const wrongPw = await open(`${WS_BASE}/ws/${pw.id}/view`, { p: "nope" });
+  check(
+    "password: wrong password refused (4004)",
+    (await closedWithin(wrongPw, 1500)) && wrongPw.closeCode === 4004,
+  );
+  const okPw = await open(`${WS_BASE}/ws/${pw.id}/view`, { p: "sw0rdfish" });
+  await sleep(400);
+  check("password: correct password admits the viewer", !okPw.closed);
+  try { okPw.close(); } catch {}
+  pbc.close();
 
   // 8. Session creation is rate limited: a burst from one client hits 429.
   let got429 = false;

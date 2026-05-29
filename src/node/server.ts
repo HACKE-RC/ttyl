@@ -6,9 +6,11 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
-import { Relay, type Conn, type Role } from "../core/relay";
+import { Relay, type Conn, type ConnMeta, type Role } from "../core/relay";
+import { hashPassword } from "../core/auth";
 import { newSessionID } from "../core/base32";
 import {
+  ADMIN_PATH,
   CONTENT_TYPE,
   parseTtlParam,
   resolveTtlSeconds,
@@ -18,7 +20,9 @@ import {
 } from "../core/http";
 import { flagValue } from "../args";
 import indexHtml from "../../web/index.html";
+import adminHtml from "../../web/admin.html";
 import viewerJs from "../../web/viewer.client.txt";
+import adminJs from "../../web/admin.client.txt";
 import xtermJs from "../../web/vendor/xterm.lib.txt";
 import xtermCss from "../../web/vendor/xterm.style.txt";
 
@@ -32,11 +36,16 @@ const RL_WINDOW_MS = 60_000;
 // A session never streamed to within this window is reaped (bounds abandoned
 // "never expire" sessions).
 const CONNECT_GRACE_MS = 2 * 60 * 1000;
+// Cap the JSON body we read on session creation; the only field is an optional
+// password, so this is generous.
+const MAX_BODY_BYTES = 4 * 1024;
 
 // Assets are embedded at build time (no third-party CDN, no runtime disk reads).
 const ASSETS = {
   index: indexHtml,
+  admin: adminHtml,
   viewer: viewerJs,
+  adminJs,
   xtermJs,
   xtermCss,
 };
@@ -95,18 +104,33 @@ function secured(
 
 // createSession starts a session. ttlOverrideSeconds comes from ?ttl=:
 // undefined uses the server default, NEVER_TTL never expires, a positive value
-// is the per-session lifetime in seconds. Every session also gets a connect
-// grace so one that is never streamed to is reaped.
-function createSession(ttlOverrideSeconds?: number): { id: string; key: string } {
+// is the per-session lifetime in seconds. An optional initial password is
+// hashed (never stored in plaintext). Every session also gets a connect grace
+// so one that is never streamed to is reaped.
+async function createSession(
+  ttlOverrideSeconds: number | undefined,
+  password: string | undefined,
+): Promise<{ id: string; key: string; admin: string }> {
   const id = newSessionID();
   const key = newSessionID();
+  const admin = newSessionID();
+  const hashed = password ? await hashPassword(password) : null;
 
   let ttlTimer: ReturnType<typeof setTimeout> | null = null;
   let graceTimer: ReturnType<typeof setTimeout> | null = null;
-  const relay = new Relay(key, () => {
-    if (ttlTimer) clearTimeout(ttlTimer);
-    if (graceTimer) clearTimeout(graceTimer);
-    sessions.delete(id);
+  const relay = new Relay({
+    controlKey: key,
+    adminKey: admin,
+    password: hashed,
+    locked: false,
+    onEnd: () => {
+      if (ttlTimer) clearTimeout(ttlTimer);
+      if (graceTimer) clearTimeout(graceTimer);
+      sessions.delete(id);
+    },
+    // In-memory adapter: management state lives in the resident Relay, so there
+    // is nothing to persist across lifetimes.
+    onPersist: () => {},
   });
 
   // NEVER_TTL (0) means no expiry timer; undefined uses the server default;
@@ -123,7 +147,7 @@ function createSession(ttlOverrideSeconds?: number): { id: string; key: string }
   }, CONNECT_GRACE_MS);
 
   sessions.set(id, { relay, ttlTimer, graceTimer });
-  return { id, key };
+  return { id, key, admin };
 }
 
 function live(id: string): Session | undefined {
@@ -131,7 +155,38 @@ function live(id: string): Session | undefined {
   return s && !s.relay.ended ? s : undefined;
 }
 
-function handleRequest(req: IncomingMessage, res: ServerResponse): void {
+// readBody collects a bounded request body, returning "" if it is missing or
+// over the cap.
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve) => {
+    let data = "";
+    let over = false;
+    req.on("data", (chunk: Buffer) => {
+      if (over) return;
+      data += chunk.toString("utf8");
+      if (data.length > MAX_BODY_BYTES) {
+        over = true;
+        data = "";
+      }
+    });
+    req.on("end", () => resolve(data));
+    req.on("error", () => resolve(""));
+  });
+}
+
+function parsePassword(body: string): string | undefined {
+  if (body === "") {
+    return undefined;
+  }
+  try {
+    const obj = JSON.parse(body) as { password?: unknown };
+    return typeof obj.password === "string" && obj.password !== "" ? obj.password : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const method = req.method ?? "GET";
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   const path = url.pathname;
@@ -140,13 +195,17 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     if (!allow(clientIp(req))) {
       return secured(res, 429, CONTENT_TYPE.text, "rate limit exceeded");
     }
-    const { id, key } = createSession(parseTtlParam(url.searchParams.get("ttl")));
+    const password = parsePassword(await readBody(req));
+    const { id, key, admin } = await createSession(
+      parseTtlParam(url.searchParams.get("ttl")),
+      password,
+    );
     res.writeHead(200, {
       "Content-Type": CONTENT_TYPE.json,
       "Referrer-Policy": "no-referrer",
       "Cache-Control": "no-store",
     });
-    res.end(JSON.stringify({ id, key }));
+    res.end(JSON.stringify({ id, key, admin }));
     return;
   }
 
@@ -162,6 +221,9 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     if (path === "/static/viewer.js") {
       return secured(res, 200, CONTENT_TYPE.js, ASSETS.viewer);
     }
+    if (path === "/static/admin.js") {
+      return secured(res, 200, CONTENT_TYPE.js, ASSETS.adminJs);
+    }
     if (path === "/static/xterm.js") {
       return secured(res, 200, CONTENT_TYPE.js, ASSETS.xtermJs);
     }
@@ -175,19 +237,35 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       }
       return secured(res, 200, CONTENT_TYPE.html, ASSETS.index);
     }
+    const adminMatch = path.match(ADMIN_PATH);
+    if (adminMatch) {
+      if (!live(adminMatch[1])) {
+        return secured(res, 404, CONTENT_TYPE.text, "session not found");
+      }
+      return secured(res, 200, CONTENT_TYPE.html, ASSETS.admin);
+    }
   }
 
   return secured(res, 404, CONTENT_TYPE.text, "not found");
 }
 
-function bridge(ws: WebSocket, relay: Relay, role: Role): void {
+function bridge(ws: WebSocket, relay: Relay, role: Role, meta: ConnMeta): void {
   const conn: Conn = {
     role,
     authed: false,
     writer: false,
+    id: "",
+    meta,
     send: (d) => {
       try {
         ws.send(d);
+      } catch {
+        // socket closing
+      }
+    },
+    sendText: (t) => {
+      try {
+        ws.send(t);
       } catch {
         // socket closing
       }
@@ -201,6 +279,13 @@ function bridge(ws: WebSocket, relay: Relay, role: Role): void {
     },
   };
   ws.on("message", (data: Buffer, isBinary: boolean) => {
+    if (role === "admin") {
+      // Admins speak the JSON control plane (text frames) only.
+      if (!isBinary) {
+        relay.controlMessage(conn, data.toString("utf8"));
+      }
+      return;
+    }
     if (!isBinary) {
       return;
     }
@@ -218,7 +303,15 @@ export function startServer(argv: string[] = process.argv.slice(2)): void {
   const port = Number(flagValue(argv, "--port", "-p") ?? process.env.PORT) || 8080;
   const host = flagValue(argv, "--host", "-H") ?? process.env.HOST ?? "0.0.0.0";
 
-  const server = createServer(handleRequest);
+  const server = createServer((req, res) => {
+    void handleRequest(req, res).catch(() => {
+      try {
+        secured(res, 500, CONTENT_TYPE.text, "internal error");
+      } catch {
+        // response already sent
+      }
+    });
+  });
   const wss = new WebSocketServer({ noServer: true });
 
   server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
@@ -229,8 +322,11 @@ export function startServer(argv: string[] = process.argv.slice(2)): void {
       socket.destroy();
       return;
     }
-    const role: Role = match[2] === "broadcast" ? "broadcaster" : "viewer";
-    wss.handleUpgrade(req, socket, head, (ws) => bridge(ws, session.relay, role));
+    const role: Role =
+      match[2] === "broadcast" ? "broadcaster" : match[2] === "admin" ? "admin" : "viewer";
+    const ua = req.headers["user-agent"];
+    const meta: ConnMeta = { ip: clientIp(req), ua: typeof ua === "string" ? ua : undefined };
+    wss.handleUpgrade(req, socket, head, (ws) => bridge(ws, session.relay, role, meta));
   });
 
   setInterval(evictStaleRateHits, RL_WINDOW_MS).unref();

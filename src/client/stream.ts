@@ -4,12 +4,16 @@
 import { createRequire } from "node:module";
 import { WebSocket } from "ws";
 import { decode, encode, Kind } from "../core/wire";
-import { parseLifetime, printLinks, resolveServer } from "./util";
+import { encodeAuthPayload } from "../core/auth";
+import { parseLifetime, printLinks, promptHidden, resolveServer } from "./util";
+import { startControlServer } from "./control";
 
 export interface StreamArgs {
   server: string;
   viewOnly: boolean;
   lifetime: string;
+  // password true means "prompt for a session password and protect viewers".
+  password: boolean;
   command: string[];
 }
 
@@ -22,29 +26,46 @@ export async function runStream(args: StreamArgs): Promise<void> {
   const ttl = parseLifetime(args.lifetime); // throws on bad input
   const server = await resolveServer(args.server);
 
+  // Prompt for the session password before anything else so it never lands in
+  // shell history; it gates every viewer that joins.
+  const password = args.password ? await promptHidden("Set a session password: ") : undefined;
+
   // node-pty is a native module; require it only here so `serve`/`init` work
   // even if its build is unavailable.
   const require = createRequire(import.meta.url);
   const pty = require("node-pty") as typeof import("node-pty");
 
-  const { id, key } = await createSession(server, ttl);
+  const { id, key, admin } = await createSession(server, ttl, password);
 
   const ws = new WebSocket(broadcastURL(server, id));
   ws.binaryType = "arraybuffer";
   await waitOpen(ws);
 
-  const enc = new TextEncoder();
-
   // Prove read-write capability with an Auth frame as the very first message.
+  // The broadcaster authenticates with the control key only (the session
+  // password never applies to it).
   if (key) {
-    ws.send(encode({ kind: Kind.Auth, data: enc.encode(key) }));
+    ws.send(encode({ kind: Kind.Auth, data: encodeAuthPayload({ k: key }) }));
   }
 
-  printLinks(server, id, key, args.viewOnly);
+  printLinks(server, id, key, admin, args.viewOnly);
 
   const cols = process.stdout.columns || 80;
   const rows = process.stdout.rows || 24;
   const command = args.command.length > 0 ? args.command : [process.env.SHELL || "/bin/sh"];
+
+  // Publish the links on a local control socket so `ttyl links` can reprint them
+  // later. Best-effort: if it fails, the stream still runs (just no recovery).
+  const stopControl = await startControlServer({
+    id,
+    key,
+    admin,
+    server,
+    viewOnly: args.viewOnly,
+    cwd: process.cwd(),
+    command: command.join(" "),
+    startedAt: Date.now(),
+  });
   // encoding: null makes the PTY emit raw Buffers, so binary / non-UTF-8 output
   // is forwarded byte-for-byte instead of being mangled by string decoding.
   const term = pty.spawn(command[0], command.slice(1), {
@@ -83,6 +104,7 @@ export async function runStream(args: StreamArgs): Promise<void> {
     } catch {
       // ignore
     }
+    void stopControl(); // remove the local control socket (best effort)
     // Give the final output a moment to flush to stdout and over the socket.
     setTimeout(() => process.exit(code), 50);
   };
@@ -153,20 +175,26 @@ function waitOpen(ws: WebSocket): Promise<void> {
 async function createSession(
   server: string,
   ttl: number | undefined,
-): Promise<{ id: string; key: string }> {
+  password: string | undefined,
+): Promise<{ id: string; key: string; admin: string }> {
   const url = new URL(`${server.replace(/\/+$/, "")}/api/sessions`);
   if (ttl !== undefined) {
     url.searchParams.set("ttl", String(ttl));
   }
-  const res = await fetch(url, { method: "POST" });
+  const init: RequestInit = { method: "POST" };
+  if (password) {
+    init.headers = { "Content-Type": "application/json" };
+    init.body = JSON.stringify({ password });
+  }
+  const res = await fetch(url, init);
   if (!res.ok) {
     throw new Error(`create session: server returned ${res.status}`);
   }
-  const body = (await res.json()) as { id?: string; key?: string };
+  const body = (await res.json()) as { id?: string; key?: string; admin?: string };
   if (!body.id) {
     throw new Error("create session: server returned empty session id");
   }
-  return { id: body.id, key: body.key ?? "" };
+  return { id: body.id, key: body.key ?? "", admin: body.admin ?? "" };
 }
 
 function broadcastURL(server: string, id: string): string {

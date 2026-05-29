@@ -110,18 +110,84 @@ const wsScheme = location.protocol === "https:" ? "wss" : "ws";
 const wsURL = `${wsScheme}://${location.host}/ws/${sessionId}/view`;
 const liveLabel = canType ? "live" : "live (view-only)";
 
-// The control key never goes in the URL; it is proven with an Auth frame sent
-// as the first message after the socket opens (empty payload = view-only).
+// Application close codes the relay uses to explain a rejected/ended viewer.
+// Keep these in sync with the CLOSE_* constants in src/core/relay.ts.
+const CLOSE_KICKED = 4001;
+const CLOSE_LOCKED = 4002;
+const CLOSE_PASSWORD_REQUIRED = 4003;
+const CLOSE_PASSWORD_INCORRECT = 4004;
+const CLOSE_TOO_MANY_ATTEMPTS = 4005;
+
+// The session password, supplied by the viewer when the relay asks for it. It
+// is held only in memory for this page and sent in the Auth frame, never put in
+// the URL.
+let password = "";
+
+// The control key and password never go in the URL; they are proven with an
+// Auth frame (JSON { k?, p? }) sent as the first message after the socket opens.
+// An empty object means a view-only viewer with no password.
 function sendAuth() {
-  const keyBytes = encoder.encode(controlKey);
-  const frame = new Uint8Array(1 + keyBytes.length);
+  const payload = {};
+  if (controlKey) payload.k = controlKey;
+  if (password) payload.p = password;
+  const bytes = encoder.encode(JSON.stringify(payload));
+  const frame = new Uint8Array(1 + bytes.length);
   frame[0] = KIND_AUTH;
-  frame.set(keyBytes, 1);
+  frame.set(bytes, 1);
   socket.send(frame);
 }
 
+// A minimal password prompt overlay, built in JS so the page ships no extra
+// markup when no password is set. The promise resolves with the entered value.
+function askPassword(message) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.setAttribute(
+      "style",
+      "position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(11,14,20,0.92);z-index:10;",
+    );
+    const box = document.createElement("form");
+    box.setAttribute(
+      "style",
+      "display:flex;flex-direction:column;gap:10px;min-width:260px;padding:20px;border:1px solid #1b2230;border-radius:8px;background:#11141c;",
+    );
+    const label = document.createElement("label");
+    label.textContent = message;
+    label.setAttribute("style", "font-size:13px;color:#c8d3f5;");
+    const input = document.createElement("input");
+    input.type = "password";
+    input.autofocus = true;
+    input.setAttribute(
+      "style",
+      "padding:8px;border:1px solid #1b2230;border-radius:4px;background:#0b0e14;color:#c8d3f5;font-family:inherit;",
+    );
+    const button = document.createElement("button");
+    button.type = "submit";
+    button.textContent = "Unlock";
+    button.setAttribute(
+      "style",
+      "padding:8px;border:none;border-radius:4px;background:#9ece6a;color:#0b0e14;font-weight:600;cursor:pointer;",
+    );
+    box.appendChild(label);
+    box.appendChild(input);
+    box.appendChild(button);
+    overlay.appendChild(box);
+    box.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const value = input.value;
+      overlay.remove();
+      resolve(value);
+    });
+    document.body.appendChild(overlay);
+    input.focus();
+  });
+}
+
 let socket;
+let stopped = false;
+
 function connect() {
+  if (stopped) return;
   setStatus("connecting...", false);
   socket = new WebSocket(wsURL);
   socket.binaryType = "arraybuffer";
@@ -131,11 +197,46 @@ function connect() {
     setStatus(liveLabel, true);
   };
   socket.onmessage = (event) => handleFrame(event.data);
-  socket.onclose = () => {
-    setStatus("disconnected - retrying...", false);
-    setTimeout(connect, 1500);
-  };
+  socket.onclose = (event) => handleClose(event.code);
   socket.onerror = () => socket.close();
+}
+
+function handleClose(code) {
+  switch (code) {
+    case CLOSE_KICKED:
+      stopped = true;
+      setStatus("removed by host", false);
+      return;
+    case CLOSE_LOCKED:
+      stopped = true;
+      setStatus("session locked - no new viewers", false);
+      return;
+    case CLOSE_PASSWORD_REQUIRED:
+      promptAndReconnect("This session is password protected:");
+      return;
+    case CLOSE_PASSWORD_INCORRECT:
+      promptAndReconnect("Incorrect password, try again:");
+      return;
+    case CLOSE_TOO_MANY_ATTEMPTS:
+      setStatus("too many attempts - retrying shortly...", false);
+      setTimeout(connect, 15000);
+      return;
+    case 1000:
+      stopped = true;
+      setStatus("session ended", false);
+      return;
+    default:
+      setStatus("disconnected - retrying...", false);
+      setTimeout(connect, 1500);
+  }
+}
+
+function promptAndReconnect(message) {
+  setStatus("password required", false);
+  askPassword(message).then((value) => {
+    password = value;
+    connect();
+  });
 }
 
 connect();

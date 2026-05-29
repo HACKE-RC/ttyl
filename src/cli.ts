@@ -8,13 +8,16 @@ const USAGE = `ttyl - share your terminal with a link
 
 Commands:
   stream   Wrap a shell in a PTY and stream it to a relay
+  links    Reprint the links for streams running on this machine
+  admin    Open the management console for a running session
   init     Save the default relay server URL to your config file
   serve    Run a relay server (Node)
 
 Flags:
-  stream [-server <url>] [-view-only] [-lifetime <30m|8h|2d|never>] [-- command...]
-  init   [-server <url>]
-  serve  [-port <n>] [-host <addr>]
+  stream [--server <url>] [--view-only] [--password] [--lifetime <30m|8h|2d|never>] [-- command...]
+  admin  [<dashboard-link>] [--server <url>] [--id <id>] [--key <admin-key>]
+  init   [--server <url>]
+  serve  [--port <n>] [--host <addr>]
 `;
 
 async function main(): Promise<void> {
@@ -27,8 +30,24 @@ async function main(): Promise<void> {
       await runStream({
         server: flagValue(flags, "-server", "--server") ?? "",
         viewOnly: flagBool(flags, "-view-only", "--view-only"),
+        password: flagBool(flags, "-password", "--password"),
         lifetime: flagValue(flags, "-lifetime", "--lifetime") ?? "",
         command,
+      });
+      return;
+    }
+    case "links": {
+      const { runLinks } = await import("./client/links");
+      await runLinks();
+      return;
+    }
+    case "admin": {
+      const { runAdmin } = await import("./client/admin");
+      await runAdmin({
+        link: positionalLink(rest),
+        server: flagValue(rest, "-server", "--server") ?? "",
+        id: flagValue(rest, "-id", "--id") ?? "",
+        key: flagValue(rest, "-key", "--key") ?? "",
       });
       return;
     }
@@ -55,6 +74,24 @@ async function main(): Promise<void> {
       process.stderr.write(`ttyl: unknown command "${cmd}"\n\n${USAGE}`);
       process.exit(2);
   }
+}
+
+function positionalLink(args: string[]): string {
+  const valueFlags = new Set(["-server", "--server", "-id", "--id", "-key", "--key"]);
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (valueFlags.has(arg)) {
+      i++;
+      continue;
+    }
+    if ([...valueFlags].some((flag) => arg.startsWith(`${flag}=`))) {
+      continue;
+    }
+    if (!arg.startsWith("-")) {
+      return arg;
+    }
+  }
+  return "";
 }
 
 main().catch((err: unknown) => {

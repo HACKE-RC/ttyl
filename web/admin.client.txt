@@ -1,0 +1,154 @@
+// ttyl dashboard: the owner-only management view. It speaks the JSON control
+// plane on /ws/<id>/admin: a hello with the admin key, then live roster pushes
+// from the relay and kick/lock/password commands back.
+//
+// The admin key arrives in the URL fragment (#<key>), which the browser never
+// sends to the server. It is read once and stripped from the address bar so it
+// does not linger in the visible URL or this navigation's history entry.
+
+const pathParts = location.pathname.split("/").filter(Boolean);
+const sessionId = pathParts[1];
+const adminKey = location.hash ? decodeURIComponent(location.hash.replace(/^#/, "")) : "";
+if (location.hash) {
+  history.replaceState(null, "", location.pathname + location.search);
+}
+
+const connEl = document.getElementById("conn");
+const dotEl = document.getElementById("dot");
+const rosterEl = document.getElementById("roster");
+const lockPill = document.getElementById("lock-pill");
+const lockBtn = document.getElementById("lock-btn");
+const pwPill = document.getElementById("pw-pill");
+const pwInput = document.getElementById("pw-input");
+const pwSet = document.getElementById("pw-set");
+const pwClear = document.getElementById("pw-clear");
+
+let socket;
+let locked = false;
+let stopped = false;
+
+function setConn(text, live) {
+  connEl.textContent = text;
+  dotEl.classList.toggle("live", Boolean(live));
+}
+
+function send(msg) {
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify(msg));
+  }
+}
+
+function fmtTime(ms) {
+  if (!ms) return "-";
+  const d = new Date(ms);
+  return d.toLocaleTimeString();
+}
+
+function truncate(s, n) {
+  if (!s) return "-";
+  return s.length > n ? s.slice(0, n - 1) + "\u2026" : s;
+}
+
+function renderRoster(roster) {
+  locked = roster.locked;
+  lockPill.textContent = roster.locked ? "locked" : "unlocked";
+  lockPill.classList.toggle("on", !roster.locked);
+  lockBtn.textContent = roster.locked ? "Unlock" : "Lock new viewers";
+  pwPill.textContent = roster.hasPassword ? "password set" : "no password";
+  pwPill.classList.toggle("on", roster.hasPassword);
+
+  rosterEl.textContent = "";
+  if (roster.clients.length === 0) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 7;
+    td.className = "empty";
+    td.textContent = "No one connected yet.";
+    tr.appendChild(td);
+    rosterEl.appendChild(tr);
+    return;
+  }
+
+  for (const c of roster.clients) {
+    const tr = document.createElement("tr");
+    const access = c.role === "broadcaster" ? "host" : c.writer ? "read-write" : "view-only";
+    const cells = [
+      c.id,
+      c.role,
+      access,
+      fmtTime(c.joinedAt),
+      truncate(c.ip, 24),
+      truncate(c.ua, 28),
+    ];
+    cells.forEach((value, i) => {
+      const td = document.createElement("td");
+      td.textContent = value;
+      if (i === 1 && c.role === "broadcaster") td.className = "role-broadcaster";
+      tr.appendChild(td);
+    });
+    const actions = document.createElement("td");
+    if (c.role !== "broadcaster") {
+      const kick = document.createElement("button");
+      kick.className = "danger";
+      kick.textContent = "Kick";
+      kick.addEventListener("click", () => send({ type: "kick", id: c.id }));
+      actions.appendChild(kick);
+    }
+    tr.appendChild(actions);
+    rosterEl.appendChild(tr);
+  }
+}
+
+function handleMessage(text) {
+  let msg;
+  try {
+    msg = JSON.parse(text);
+  } catch {
+    return;
+  }
+  if (msg.type === "roster") {
+    renderRoster(msg);
+  }
+}
+
+lockBtn.addEventListener("click", () => send({ type: locked ? "unlock" : "lock" }));
+pwSet.addEventListener("click", () => {
+  const value = pwInput.value;
+  if (!value) return;
+  send({ type: "password", value });
+  pwInput.value = "";
+});
+pwClear.addEventListener("click", () => send({ type: "password", clear: true }));
+
+const wsScheme = location.protocol === "https:" ? "wss" : "ws";
+const wsURL = `${wsScheme}://${location.host}/ws/${sessionId}/admin`;
+
+function connect() {
+  if (stopped) return;
+  setConn("connecting...", false);
+  socket = new WebSocket(wsURL);
+  socket.onopen = () => {
+    socket.send(JSON.stringify({ type: "hello", key: adminKey }));
+    setConn("connected", true);
+  };
+  socket.onmessage = (event) => {
+    if (typeof event.data === "string") handleMessage(event.data);
+  };
+  socket.onclose = (event) => {
+    if (event.code === 1008) {
+      stopped = true;
+      setConn("access denied - this admin link is invalid", false);
+      return;
+    }
+    if (event.code === 1000) {
+      stopped = true;
+      setConn("session ended", false);
+      return;
+    }
+    setConn("disconnected - retrying...", false);
+    setTimeout(connect, 1500);
+  };
+  socket.onerror = () => socket.close();
+}
+
+connect();
