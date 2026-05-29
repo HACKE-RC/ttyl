@@ -1,4 +1,4 @@
-module github.com/rc/astream
+module github.com/rc/ttyl
 
 go 1.26.2
 

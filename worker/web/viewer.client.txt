@@ -8,6 +8,7 @@
 const KIND_OUTPUT = 0;
 const KIND_INPUT = 1;
 const KIND_RESIZE = 2;
+const KIND_AUTH = 3;
 
 const statusEl = document.getElementById("status");
 const statusText = document.getElementById("status-text");
@@ -60,6 +61,19 @@ if (window.visualViewport) {
   window.visualViewport.addEventListener("resize", fitFontToTab);
 }
 
+// The page is always /s/{id}. The read-write control key, if any, arrives in
+// the URL fragment (#{key}), which the browser never sends to the server. A
+// present key authorizes typing; without it this viewer is view-only. The key
+// is read once and then stripped from the address bar so it does not linger in
+// the visible URL or this navigation's history entry.
+const pathParts = location.pathname.split("/").filter(Boolean);
+const sessionId = pathParts[1];
+const controlKey = location.hash ? decodeURIComponent(location.hash.replace(/^#/, "")) : "";
+const canType = controlKey.length > 0;
+if (controlKey) {
+  history.replaceState(null, "", location.pathname + location.search);
+}
+
 // The broadcaster owns the terminal size; the viewer only mirrors it.
 const encoder = new TextEncoder();
 function sendInput(data) {
@@ -71,7 +85,11 @@ function sendInput(data) {
     socket.send(frame);
   }
 }
-term.onData(sendInput);
+if (canType) {
+  term.onData(sendInput);
+} else {
+  term.options.disableStdin = true;
+}
 
 function handleFrame(buffer) {
   const view = new DataView(buffer);
@@ -88,9 +106,19 @@ function handleFrame(buffer) {
   }
 }
 
-const sessionId = location.pathname.split("/").pop();
 const wsScheme = location.protocol === "https:" ? "wss" : "ws";
 const wsURL = `${wsScheme}://${location.host}/ws/${sessionId}/view`;
+const liveLabel = canType ? "live" : "live (view-only)";
+
+// The control key never goes in the URL; it is proven with an Auth frame sent
+// as the first message after the socket opens (empty payload = view-only).
+function sendAuth() {
+  const keyBytes = encoder.encode(controlKey);
+  const frame = new Uint8Array(1 + keyBytes.length);
+  frame[0] = KIND_AUTH;
+  frame.set(keyBytes, 1);
+  socket.send(frame);
+}
 
 let socket;
 function connect() {
@@ -98,7 +126,10 @@ function connect() {
   socket = new WebSocket(wsURL);
   socket.binaryType = "arraybuffer";
 
-  socket.onopen = () => setStatus("live", true);
+  socket.onopen = () => {
+    sendAuth();
+    setStatus(liveLabel, true);
+  };
   socket.onmessage = (event) => handleFrame(event.data);
   socket.onclose = () => {
     setStatus("disconnected - retrying...", false);

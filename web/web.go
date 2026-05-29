@@ -1,4 +1,4 @@
-// Package web holds the embedded static assets for the astream viewer.
+// Package web holds the embedded static assets for the ttyl viewer.
 package web
 
 import "embed"

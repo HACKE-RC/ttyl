@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/rc/astream/internal/wire"
+	"github.com/rc/ttyl/internal/wire"
 )
 
 // dialWS opens a WebSocket against an httptest server URL + path.
