@@ -20,6 +20,7 @@ const HELP = `commands:
   lock | unlock     stop / allow new viewers joining
   password <value>  set a session password (gates all viewers)
   password clear    remove the session password
+  end               end the session for everyone (stops the stream)
   help              show this help
   quit              leave the console (the session keeps running)
 `;
@@ -119,6 +120,9 @@ function handleCommand(line: string, ws: WebSocket, viewers: RosterEntry[]): voi
       } else {
         process.stderr.write("ttyl: usage: password <value> | password clear\n");
       }
+      return;
+    case "end":
+      ws.send(JSON.stringify({ type: "end" }));
       return;
     case "help":
       process.stderr.write(HELP);

@@ -39,7 +39,8 @@ export type AdminClientMessage =
   | { type: "lock" }
   | { type: "unlock" }
   | { type: "password"; value: string }
-  | { type: "password"; clear: true };
+  | { type: "password"; clear: true }
+  | { type: "end" };
 
 // parseAdminMessage validates an incoming control-plane string. It returns null
 // for anything malformed so the relay can ignore junk instead of throwing.
@@ -68,6 +69,8 @@ export function parseAdminMessage(text: string): AdminClientMessage | null {
         return { type: "password", clear: true };
       }
       return typeof rec.value === "string" ? { type: "password", value: rec.value } : null;
+    case "end":
+      return { type: "end" };
     default:
       return null;
   }

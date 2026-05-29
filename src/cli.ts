@@ -9,12 +9,14 @@ const USAGE = `ttyl - share your terminal with a link
 Commands:
   stream   Wrap a shell in a PTY and stream it to a relay
   links    Reprint the links for streams running on this machine
+  stop     Stop a stream running on this machine
   admin    Open the management console for a running session
   init     Save the default relay server URL to your config file
   serve    Run a relay server (Node)
 
 Flags:
   stream [--server <url>] [--view-only] [--password] [--lifetime <30m|8h|2d|never>] [-- command...]
+  stop   [<session-id>]
   admin  [<dashboard-link>] [--server <url>] [--id <id>] [--key <admin-key>]
   init   [--server <url>]
   serve  [--port <n>] [--host <addr>]
@@ -39,6 +41,11 @@ async function main(): Promise<void> {
     case "links": {
       const { runLinks } = await import("./client/links");
       await runLinks();
+      return;
+    }
+    case "stop": {
+      const { runStop } = await import("./client/stop");
+      await runStop(rest.find((arg) => !arg.startsWith("-")));
       return;
     }
     case "admin": {

@@ -22,6 +22,7 @@ const pwPill = document.getElementById("pw-pill");
 const pwInput = document.getElementById("pw-input");
 const pwSet = document.getElementById("pw-set");
 const pwClear = document.getElementById("pw-clear");
+const endBtn = document.getElementById("end-btn");
 
 let socket;
 let locked = false;
@@ -119,6 +120,11 @@ pwSet.addEventListener("click", () => {
   pwInput.value = "";
 });
 pwClear.addEventListener("click", () => send({ type: "password", clear: true }));
+endBtn.addEventListener("click", () => {
+  if (confirm("End this session for everyone? The stream will stop.")) {
+    send({ type: "end" });
+  }
+});
 
 const wsScheme = location.protocol === "https:" ? "wss" : "ws";
 const wsURL = `${wsScheme}://${location.host}/ws/${sessionId}/admin`;

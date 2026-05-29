@@ -171,6 +171,36 @@ describe("relay lock", () => {
   });
 });
 
+describe("relay end", () => {
+  it("ends the session for everyone when an admin sends end", () => {
+    const { relay, isEnded } = newRelay();
+    const admin = new StubConn("admin");
+    relay.controlMessage(admin, JSON.stringify({ type: "hello", key: ADMIN }));
+
+    const bc = new StubConn("broadcaster");
+    relay.message(bc, auth({ k: CONTROL }));
+    const v = new StubConn("viewer");
+    relay.message(v, auth({}));
+
+    relay.controlMessage(admin, JSON.stringify({ type: "end" }));
+
+    expect(relay.ended).toBe(true);
+    expect(isEnded()).toBe(true);
+    expect(bc.closedCode).toBe(1000);
+    expect(v.closedCode).toBe(1000);
+    expect(admin.closedCode).toBe(1000);
+    expect(relay.hasBroadcaster).toBe(false);
+  });
+
+  it("ignores end from an unauthed admin", () => {
+    const { relay, isEnded } = newRelay();
+    const admin = new StubConn("admin");
+    relay.controlMessage(admin, JSON.stringify({ type: "end" }));
+    expect(admin.closedCode).toBe(1008);
+    expect(isEnded()).toBe(false);
+  });
+});
+
 describe("relay password gate", () => {
   it("requires the correct password for viewers", async () => {
     const password = await hashPassword("s3cret");

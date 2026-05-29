@@ -56,16 +56,21 @@ export async function runStream(args: StreamArgs): Promise<void> {
 
   // Publish the links on a local control socket so `ttyl links` can reprint them
   // later. Best-effort: if it fails, the stream still runs (just no recovery).
-  const stopControl = await startControlServer({
-    id,
-    key,
-    admin,
-    server,
-    viewOnly: args.viewOnly,
-    cwd: process.cwd(),
-    command: command.join(" "),
-    startedAt: Date.now(),
-  });
+  const stopControl = await startControlServer(
+    {
+      id,
+      key,
+      admin,
+      server,
+      viewOnly: args.viewOnly,
+      cwd: process.cwd(),
+      command: command.join(" "),
+      startedAt: Date.now(),
+    },
+    // `ttyl stop` (from another terminal) tears the session down via the same
+    // path as a normal exit.
+    () => cleanup(0),
+  );
   // encoding: null makes the PTY emit raw Buffers, so binary / non-UTF-8 output
   // is forwarded byte-for-byte instead of being mangled by string decoding.
   const term = pty.spawn(command[0], command.slice(1), {
