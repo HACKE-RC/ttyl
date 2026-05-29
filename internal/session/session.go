@@ -1,4 +1,4 @@
-// Package session implements the pure routing core of astream: a registry of
+// Package session implements the pure routing core of ttyl: a registry of
 // live sessions and the fan-out/fan-in logic that connects one PTY broadcaster
 // to many web viewers.
 //
@@ -9,7 +9,7 @@ package session
 import (
 	"sync"
 
-	"github.com/rc/astream/internal/wire"
+	"github.com/rc/ttyl/internal/wire"
 )
 
 // subscriberBuffer bounds how many frames may queue for a single viewer before

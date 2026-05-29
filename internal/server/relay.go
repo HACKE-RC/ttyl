@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/rc/astream/internal/session"
-	"github.com/rc/astream/internal/wire"
+	"github.com/rc/ttyl/internal/session"
+	"github.com/rc/ttyl/internal/wire"
 )
 
 // Keepalive timings. The server pings idle connections and drops any peer that

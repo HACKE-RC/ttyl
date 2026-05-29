@@ -1,4 +1,4 @@
-// Package wire defines the single source of truth for the astream protocol.
+// Package wire defines the single source of truth for the ttyl protocol.
 //
 // Frames are exchanged over a WebSocket between the streaming client (the PTY
 // broadcaster) and the relay server, and between the server and web viewers.

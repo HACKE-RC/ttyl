@@ -1,4 +1,4 @@
-// astream web viewer: renders a live PTY stream and forwards keystrokes.
+// ttyl web viewer: renders a live PTY stream and forwards keystrokes.
 //
 // The wire protocol mirrors internal/wire: each WebSocket binary message is a
 // single frame whose first byte is the kind, followed by the payload.

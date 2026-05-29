@@ -1,8 +1,8 @@
 {
-  "name": "astream-relay",
+  "name": "ttyl-relay",
   "version": "0.1.0",
   "private": true,
-  "description": "astream live terminal relay: one TypeScript core, deployable as a Cloudflare Worker or a Node server",
+  "description": "ttyl live terminal relay: one TypeScript core, deployable as a Cloudflare Worker or a Node server",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",

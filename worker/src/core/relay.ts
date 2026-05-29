@@ -1,4 +1,4 @@
-// Relay is the pure, transport-agnostic core of astream: it connects one PTY
+// Relay is the pure, transport-agnostic core of ttyl: it connects one PTY
 // broadcaster to many web viewers and contains all of the routing, scrollback,
 // authentication, and access-control logic. It is the shared brain used by both
 // deployment adapters (the Cloudflare Worker Durable Object and the Node

@@ -1,11 +1,11 @@
-// Command astream streams a live, interactive terminal session to a self-hosted
+// Command ttyl streams a live, interactive terminal session to a self-hosted
 // relay server that serves a shareable web link.
 //
 // Usage:
 //
-//	astream serve  [-addr :8080]
-//	astream init   [-server http://host:8080]
-//	astream stream [-server http://host:8080] [-- command args...]
+//	ttyl serve  [-addr :8080]
+//	ttyl init   [-server http://host:8080]
+//	ttyl stream [-server http://host:8080] [-- command args...]
 package main
 
 import (
@@ -15,8 +15,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/rc/astream/internal/client"
-	"github.com/rc/astream/internal/server"
+	"github.com/rc/ttyl/internal/client"
+	"github.com/rc/ttyl/internal/server"
 )
 
 func main() {
@@ -41,25 +41,25 @@ func main() {
 		usage()
 		return
 	default:
-		fmt.Fprintf(os.Stderr, "astream: unknown command %q\n\n", cmd)
+		fmt.Fprintf(os.Stderr, "ttyl: unknown command %q\n\n", cmd)
 		usage()
 		os.Exit(2)
 	}
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "astream: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ttyl: %v\n", err)
 		os.Exit(1)
 	}
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `astream - live interactive terminal streaming
+	fmt.Fprint(os.Stderr, `ttyl - live interactive terminal streaming
 
 Commands:
   serve    Run the relay/web server
   init     Save the default relay server URL to your config file
   stream   Wrap a shell in a PTY and stream it to a server
 
-Run "astream <command> -h" for command-specific flags.
+Run "ttyl <command> -h" for command-specific flags.
 `)
 }

@@ -1,4 +1,4 @@
-// Port of internal/wire: the single source of truth for the astream protocol.
+// Port of internal/wire: the single source of truth for the ttyl protocol.
 //
 // Each WebSocket binary message is one frame: a single Kind byte followed by
 // the payload. Output/Input carry raw bytes; Resize carries two big-endian

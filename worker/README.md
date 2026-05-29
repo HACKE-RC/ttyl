@@ -1,8 +1,8 @@
-# astream
+# ttyl
 
 Share your terminal with a link.
 
-`astream` streams a live terminal session to anyone with the URL. They watch in
+`ttyl` streams a live terminal session to anyone with the URL. They watch in
 their browser as it happens, and if you give them the right link, they can type
 back into your session too. It's like screen-sharing for the terminal, except
 there's nothing for the other person to install. They just open a link.
@@ -34,7 +34,7 @@ npx wrangler login
 npm run deploy
 ```
 
-You'll get back a URL like `https://astream-relay.<you>.workers.dev`.
+You'll get back a URL like `https://ttyl-relay.<you>.workers.dev`.
 
 Or on your own machine:
 
@@ -48,17 +48,17 @@ Run that one behind HTTPS (Caddy or nginx is fine) so links work over `wss://`.
 
 ### 2. Share your terminal
 
-Tell the `astream` client where your relay is, once, then stream:
+Tell the `ttyl` client where your relay is, once, then stream:
 
 ```bash
-astream init -server https://astream-relay.<you>.workers.dev
-astream stream
+ttyl init -server https://ttyl-relay.<you>.workers.dev
+ttyl stream
 ```
 
 It prints two links:
 
 ```
-astream: streaming live
+ttyl: streaming live
   read-write: https://.../s/<id>#<key>     <- watch AND type
   view-only:  https://.../s/<id>           <- watch only
 ```
@@ -69,22 +69,22 @@ open it in a browser and they're in.
 If you don't want anyone typing, hand out just the view-only link:
 
 ```bash
-astream stream -view-only
+ttyl stream -view-only
 ```
 
 The session ends when you exit your shell. It also expires on its own after a
 while; set how long with `-lifetime`:
 
 ```bash
-astream stream -lifetime 2d       # 30m, 6h, 8h, 2d, 1d12h, ...
-astream stream -lifetime never    # only ends when you disconnect
+ttyl stream -lifetime 2d       # 30m, 6h, 8h, 2d, 1d12h, ...
+ttyl stream -lifetime never    # only ends when you disconnect
 ```
 
 Without the flag, the relay's own default applies (8 hours).
 
-`astream init` saves the server to a config file in your OS's usual spot
-(`~/.config/astream/` on Linux, `~/Library/Application Support/astream/` on
-macOS, `%AppData%\astream\` on Windows), so you only do it once. You can still
+`ttyl init` saves the server to a config file in your OS's usual spot
+(`~/.config/ttyl/` on Linux, `~/Library/Application Support/ttyl/` on
+macOS, `%AppData%\ttyl\` on Windows), so you only do it once. You can still
 pass `-server <url>` to any `stream` to override the saved value.
 
 ---
@@ -165,12 +165,12 @@ that, run it behind an identity proxy like Cloudflare Access.
 
 | Setting | Where | Default |
 | --- | --- | --- |
-| Session lifetime (per stream) | `astream stream -lifetime <30m\|8h\|2d\|never>` | relay default |
+| Session lifetime (per stream) | `ttyl stream -lifetime <30m\|8h\|2d\|never>` | relay default |
 | Session lifetime (relay default) | `SESSION_TTL_SECONDS` (env or `wrangler.toml`) | 8 hours |
 | Sessions per IP | `[[ratelimits]]` in `wrangler.toml` (Worker) | 20 / minute |
 | Server port and host | `--port`/`--host` flags or `PORT`/`HOST` env | `0.0.0.0:8080` |
 | Trust `X-Forwarded-For` (Node, behind a proxy) | `TRUST_PROXY=1` env | off |
-| Worker hostname | `name` in `wrangler.toml` | `astream-relay` |
+| Worker hostname | `name` in `wrangler.toml` | `ttyl-relay` |
 
 ---
 

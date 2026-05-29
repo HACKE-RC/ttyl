@@ -1,4 +1,4 @@
-// Package client implements the astream streaming side: it wraps a shell in a
+// Package client implements the ttyl streaming side: it wraps a shell in a
 // local PTY, mirrors it to the user's terminal, and bridges it to a relay
 // server so viewers can watch and type over the web.
 package client
@@ -20,8 +20,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/rc/astream/internal/config"
-	"github.com/rc/astream/internal/wire"
+	"github.com/rc/ttyl/internal/config"
+	"github.com/rc/ttyl/internal/wire"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -35,12 +35,12 @@ const (
 	readChunk    = 4096
 )
 
-// Init handles `astream init`: it saves the relay server URL (and any other
-// client settings) to the per-user config file so `astream stream` can be run
+// Init handles `ttyl init`: it saves the relay server URL (and any other
+// client settings) to the per-user config file so `ttyl stream` can be run
 // without -server. With no -server flag it prints the current configuration.
 func Init(_ context.Context, args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	server := fs.String("server", "", "default astream relay server base URL to save")
+	server := fs.String("server", "", "default ttyl relay server base URL to save")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -52,7 +52,7 @@ func Init(_ context.Context, args []string) error {
 		}
 		path, _ := config.Path()
 		if cur.Server == "" {
-			fmt.Fprintf(os.Stderr, "no server configured. Set one with:\n  astream init -server <url>\n")
+			fmt.Fprintf(os.Stderr, "no server configured. Set one with:\n  ttyl init -server <url>\n")
 		} else {
 			fmt.Fprintf(os.Stderr, "configured server: %s\n  (%s)\n", cur.Server, path)
 		}
@@ -80,7 +80,7 @@ func Init(_ context.Context, args []string) error {
 // until the command exits or ctx is cancelled.
 func Run(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("stream", flag.ContinueOnError)
-	server := fs.String("server", "", "astream server base URL (overrides saved config)")
+	server := fs.String("server", "", "ttyl server base URL (overrides saved config)")
 	viewOnly := fs.Bool("view-only", false, "only share a view-only link; viewers cannot type")
 	lifetime := fs.String("lifetime", "", "max session lifetime, e.g. 30m, 8h, 2d, or 'never' (default: server's setting)")
 	if err := fs.Parse(args); err != nil {
@@ -304,7 +304,7 @@ func validateServerURL(s string) (string, error) {
 
 // resolveServer picks the relay URL: an explicit -server flag wins, otherwise
 // the saved config value, otherwise the built-in default. It nudges the user
-// toward `astream init` when falling back to the default.
+// toward `ttyl init` when falling back to the default.
 func resolveServer(flagValue string) (string, error) {
 	if flagValue != "" {
 		return strings.TrimRight(flagValue, "/"), nil
@@ -316,8 +316,8 @@ func resolveServer(flagValue string) (string, error) {
 	if cfg.Server != "" {
 		return cfg.Server, nil
 	}
-	fmt.Fprintf(os.Stderr, "astream: no -server given and none configured; using %s\n", defaultServer)
-	fmt.Fprintf(os.Stderr, "astream: set a default with: astream init -server <url>\n")
+	fmt.Fprintf(os.Stderr, "ttyl: no -server given and none configured; using %s\n", defaultServer)
+	fmt.Fprintf(os.Stderr, "ttyl: set a default with: ttyl init -server <url>\n")
 	return defaultServer, nil
 }
 
@@ -398,17 +398,17 @@ func createSession(ctx context.Context, server string, ttl int64) (id, key strin
 func printLinks(w io.Writer, server, id, key string, viewOnly bool) {
 	base := strings.TrimRight(server, "/")
 	if key == "" {
-		fmt.Fprintf(w, "astream: streaming live at %s/s/%s\r\n", base, id)
+		fmt.Fprintf(w, "ttyl: streaming live at %s/s/%s\r\n", base, id)
 		return
 	}
 	if viewOnly {
-		fmt.Fprintf(w, "astream: streaming live (view-only)\r\n")
+		fmt.Fprintf(w, "ttyl: streaming live (view-only)\r\n")
 		fmt.Fprintf(w, "  view-only: %s/s/%s\r\n", base, id)
 		return
 	}
 	// The control key rides in the URL fragment (#key): browsers never send it
 	// to the server, so it stays out of logs and history.
-	fmt.Fprintf(w, "astream: streaming live\r\n")
+	fmt.Fprintf(w, "ttyl: streaming live\r\n")
 	fmt.Fprintf(w, "  read-write: %s/s/%s#%s\r\n", base, id, key)
 	fmt.Fprintf(w, "  view-only:  %s/s/%s\r\n", base, id)
 }

@@ -1,4 +1,4 @@
-// Node server adapter for the astream relay. It runs the same core Relay as the
+// Node server adapter for the ttyl relay. It runs the same core Relay as the
 // Cloudflare Worker, but hosts it as a long-lived HTTP + WebSocket server you
 // can deploy on any VM, container, or PaaS. Sessions live in an in-memory
 // registry; a timer enforces the TTL; a sliding-window counter rate limits
@@ -171,7 +171,7 @@ const server = createServer((req, res) => {
         res,
         200,
         CONTENT_TYPE.text,
-        "astream relay server. Start a stream with: astream stream\n",
+        "ttyl relay server. Start a stream with: ttyl stream\n",
       );
     }
     if (path === "/static/viewer.js") {
@@ -240,5 +240,5 @@ function bridge(ws: WebSocket, relay: Relay, role: Role): void {
 }
 
 server.listen(PORT, HOST, () => {
-  console.log(`astream relay (node) listening on http://${HOST}:${PORT}`);
+  console.log(`ttyl relay (node) listening on http://${HOST}:${PORT}`);
 });

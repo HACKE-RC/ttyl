@@ -1,4 +1,4 @@
-// Cloudflare Worker adapter for the astream relay. The stateless Worker routes
+// Cloudflare Worker adapter for the ttyl relay. The stateless Worker routes
 // requests; one Durable Object per session id holds a core Relay in memory and
 // bridges real WebSockets to it. Sockets use the classic accept() API so the
 // Durable Object stays resident (and its Relay state intact) while a session is
@@ -187,7 +187,7 @@ export default {
     if (request.method === "GET") {
       if (path === "/") {
         return secured(
-          "astream relay server. Start a stream with: astream stream\n",
+          "ttyl relay server. Start a stream with: ttyl stream\n",
           CONTENT_TYPE.text,
         );
       }

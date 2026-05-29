@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/rc/astream/internal/session"
-	"github.com/rc/astream/web"
+	"github.com/rc/ttyl/internal/session"
+	"github.com/rc/ttyl/web"
 )
 
 // Run parses serve flags and runs the relay/web server until ctx is cancelled.
@@ -26,7 +26,7 @@ func Run(ctx context.Context, args []string) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		fmt.Printf("astream server listening on %s\n", *addr)
+		fmt.Printf("ttyl server listening on %s\n", *addr)
 		errCh <- srv.ListenAndServe()
 	}()
 
@@ -74,7 +74,7 @@ func (s *server) routes() http.Handler {
 
 func (s *server) index(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintln(w, "astream relay server. Start a stream with: astream stream")
+	fmt.Fprintln(w, "ttyl relay server. Start a stream with: ttyl stream")
 }
 
 func (s *server) createSession(w http.ResponseWriter, _ *http.Request) {

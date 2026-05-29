@@ -1,6 +1,6 @@
-# astream
+# ttyl
 
-`astream` streams a live, interactive terminal session through a self-hosted relay server and exposes it as a shareable browser link. Viewers see terminal output in real time and can type into the same PTY-backed session.
+`ttyl` streams a live, interactive terminal session through a self-hosted relay server and exposes it as a shareable browser link. Viewers see terminal output in real time and can type into the same PTY-backed session.
 
 It is effectively a live, bidirectional terminal share: one broadcaster owns the terminal, and connected viewers mirror its output and can send input back into the session.
 
@@ -20,13 +20,13 @@ It is effectively a live, bidirectional terminal share: one broadcaster owns the
 local terminal + PTY
         |
         v
-astream stream  --WebSocket-->  astream serve  --WebSocket-->  browser viewers
+ttyl stream  --WebSocket-->  ttyl serve  --WebSocket-->  browser viewers
 ```
 
 The flow is split into two commands:
 
-- `astream serve` starts the relay server, exposes the browser UI, creates session IDs, and bridges broadcaster/viewer sockets.
-- `astream stream` creates a remote session, starts a local PTY, mirrors PTY output to your own terminal, and streams terminal frames to the relay.
+- `ttyl serve` starts the relay server, exposes the browser UI, creates session IDs, and bridges broadcaster/viewer sockets.
+- `ttyl stream` creates a remote session, starts a local PTY, mirrors PTY output to your own terminal, and streams terminal frames to the relay.
 
 At runtime:
 
@@ -45,7 +45,7 @@ At runtime:
 ## Build
 
 ```bash
-go build -o astream ./cmd/astream
+go build -o ttyl ./cmd/ttyl
 ```
 
 ## Commands
@@ -53,7 +53,7 @@ go build -o astream ./cmd/astream
 ### Start the relay server
 
 ```bash
-./astream serve -addr :8080
+./ttyl serve -addr :8080
 ```
 
 This starts the HTTP/WebSocket relay server and serves:
@@ -66,7 +66,7 @@ This starts the HTTP/WebSocket relay server and serves:
 ### Stream your shell
 
 ```bash
-./astream stream -server http://localhost:8080
+./ttyl stream -server http://localhost:8080
 ```
 
 When the session is created, the client prints a shareable URL like:
@@ -80,17 +80,17 @@ Anyone with that URL can open the session in a browser and interact with the sha
 ### Stream a specific command
 
 ```bash
-./astream stream -server http://localhost:8080 -- bash --norc -i
+./ttyl stream -server http://localhost:8080 -- bash --norc -i
 ```
 
-If no command is provided, `astream` uses `$SHELL`, falling back to `/bin/sh` when unset.
+If no command is provided, `ttyl` uses `$SHELL`, falling back to `/bin/sh` when unset.
 
 The session ends when the wrapped command exits or the broadcaster disconnects.
 
 ## Example workflow
 
 1. Start the relay server on your machine or a remote host.
-2. Run `astream stream -server <server-url>` from the terminal you want to share.
+2. Run `ttyl stream -server <server-url>` from the terminal you want to share.
 3. Copy the printed `/s/<id>` URL.
 4. Open the link in one or more browsers.
 5. All viewers see the same terminal, and any viewer can type into it.
@@ -123,7 +123,7 @@ Only share links with people you trust, because all participants can inject term
 
 | Path | Responsibility |
 | --- | --- |
-| `cmd/astream` | CLI entrypoint for `serve` and `stream` |
+| `cmd/ttyl` | CLI entrypoint for `serve` and `stream` |
 | `internal/client` | PTY lifecycle, local terminal handling, and stream orchestration |
 | `internal/server` | HTTP routes, WebSocket upgrade, and relay plumbing |
 | `internal/session` | Session hub, subscriptions, fan-in/fan-out, and scrollback |

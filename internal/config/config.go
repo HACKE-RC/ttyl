@@ -1,11 +1,11 @@
-// Package config persists astream client settings (currently the default relay
+// Package config persists ttyl client settings (currently the default relay
 // server URL) to a small JSON file in the user's OS config directory, so the
 // server does not have to be passed on every stream. The location follows each
 // platform's convention via os.UserConfigDir:
 //
-//	Linux/BSD: $XDG_CONFIG_HOME/astream/config.json  (or ~/.config/astream/...)
-//	macOS:     ~/Library/Application Support/astream/config.json
-//	Windows:   %AppData%\astream\config.json
+//	Linux/BSD: $XDG_CONFIG_HOME/ttyl/config.json  (or ~/.config/ttyl/...)
+//	macOS:     ~/Library/Application Support/ttyl/config.json
+//	Windows:   %AppData%\ttyl\config.json
 package config
 
 import (
@@ -17,7 +17,7 @@ import (
 
 // Config holds persisted client settings.
 type Config struct {
-	// Server is the default relay base URL used by `astream stream` when no
+	// Server is the default relay base URL used by `ttyl stream` when no
 	// -server flag is given.
 	Server string `json:"server,omitempty"`
 }
@@ -28,7 +28,7 @@ func Path() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("locate config dir: %w", err)
 	}
-	return filepath.Join(dir, "astream", "config.json"), nil
+	return filepath.Join(dir, "ttyl", "config.json"), nil
 }
 
 // Load reads the config file. A missing file is not an error: it returns a zero

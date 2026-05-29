@@ -1,4 +1,4 @@
-// End-to-end relay test against a running dev/deployed astream Worker.
+// End-to-end relay test against a running dev/deployed ttyl Worker.
 // Usage: node test/e2e.mjs [baseURL]   (default http://127.0.0.1:8787)
 //
 // Exercises the full protocol the Go client and browser viewer rely on:

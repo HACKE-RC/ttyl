@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rc/astream/internal/wire"
+	"github.com/rc/ttyl/internal/wire"
 )
 
 func recv(t *testing.T, ch <-chan wire.Frame) wire.Frame {
