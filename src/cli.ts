@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 // ttyl command-line entrypoint: dispatches to the streaming client, the config
-// initializer, or a local relay server.
-import { runStream } from "./client/stream";
-import { runInit } from "./client/init";
-import { startServer } from "./node/server";
+// initializer, or a local relay server. Command modules are imported lazily so,
+// e.g., `serve` and `init` do not load the streaming client's native PTY dep.
+import { flagBool, flagValue, splitArgs } from "./args";
 
 const USAGE = `ttyl - share your terminal with a link
 
@@ -18,54 +17,28 @@ Flags:
   serve  [-port <n>] [-host <addr>]
 `;
 
-// splitArgs separates flags (before "--") from a trailing command (after "--").
-function splitArgs(args: string[]): { flags: string[]; command: string[] } {
-  const i = args.indexOf("--");
-  if (i === -1) {
-    return { flags: args, command: [] };
-  }
-  return { flags: args.slice(0, i), command: args.slice(i + 1) };
-}
-
-// flagValue returns the value of -name/--name (as "name v" or "name=v").
-function flagValue(args: string[], name: string): string | undefined {
-  const forms = [`-${name}`, `--${name}`];
-  for (let i = 0; i < args.length; i++) {
-    for (const f of forms) {
-      if (args[i] === f) {
-        return args[i + 1];
-      }
-      if (args[i].startsWith(`${f}=`)) {
-        return args[i].slice(f.length + 1);
-      }
-    }
-  }
-  return undefined;
-}
-
-function flagBool(args: string[], name: string): boolean {
-  return args.includes(`-${name}`) || args.includes(`--${name}`);
-}
-
 async function main(): Promise<void> {
   const [cmd, ...rest] = process.argv.slice(2);
 
   switch (cmd) {
     case "stream": {
       const { flags, command } = splitArgs(rest);
+      const { runStream } = await import("./client/stream");
       await runStream({
-        server: flagValue(flags, "server") ?? "",
-        viewOnly: flagBool(flags, "view-only"),
-        lifetime: flagValue(flags, "lifetime") ?? "",
+        server: flagValue(flags, "-server", "--server") ?? "",
+        viewOnly: flagBool(flags, "-view-only", "--view-only"),
+        lifetime: flagValue(flags, "-lifetime", "--lifetime") ?? "",
         command,
       });
       return;
     }
     case "init": {
-      await runInit({ server: flagValue(rest, "server") ?? "" });
+      const { runInit } = await import("./client/init");
+      await runInit({ server: flagValue(rest, "-server", "--server") ?? "" });
       return;
     }
     case "serve": {
+      const { startServer } = await import("./node/server");
       startServer(rest);
       return;
     }

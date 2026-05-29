@@ -26,17 +26,23 @@ export function configPath(): string {
   return join(configDir(), "ttyl", "config.json");
 }
 
-// load reads the config file; a missing file yields an empty config so callers
-// fall back to defaults.
+// load reads the config file; a missing or corrupt file yields an empty config
+// so callers fall back to defaults rather than failing every command.
 export async function load(): Promise<Config> {
+  let data: string;
   try {
-    const data = await readFile(configPath(), "utf8");
-    return JSON.parse(data) as Config;
+    data = await readFile(configPath(), "utf8");
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       return {};
     }
     throw err;
+  }
+  try {
+    return JSON.parse(data) as Config;
+  } catch {
+    process.stderr.write(`ttyl: ignoring unreadable config at ${configPath()}\n`);
+    return {};
   }
 }
 
@@ -44,7 +50,7 @@ export async function load(): Promise<Config> {
 // the path written.
 export async function save(config: Config): Promise<string> {
   const path = configPath();
-  await mkdir(dirname(path), { recursive: true });
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   await writeFile(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
   return path;
 }

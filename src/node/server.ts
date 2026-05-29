@@ -16,6 +16,7 @@ import {
   VIEWER_PATH,
   WS_PATH,
 } from "../core/http";
+import { flagValue } from "../args";
 import indexHtml from "../../web/index.html";
 import viewerJs from "../../web/viewer.client.txt";
 import xtermJs from "../../web/vendor/xterm.lib.txt";
@@ -71,16 +72,16 @@ function allow(ip: string): boolean {
   return true;
 }
 
-// Periodically drop rate-limit buckets with no recent hits so the map cannot
-// grow without bound across many distinct client IPs.
-setInterval(() => {
+// Drop rate-limit buckets with no recent hits so the map cannot grow without
+// bound across many distinct client IPs. Scheduled by startServer.
+function evictStaleRateHits(): void {
   const cutoff = Date.now() - RL_WINDOW_MS;
   for (const [ip, hits] of rateHits) {
     if (hits.every((t) => t <= cutoff)) {
       rateHits.delete(ip);
     }
   }
-}, RL_WINDOW_MS).unref();
+}
 
 function secured(
   res: ServerResponse,
@@ -130,7 +131,7 @@ function live(id: string): Session | undefined {
   return s && !s.relay.ended ? s : undefined;
 }
 
-const server = createServer((req, res) => {
+function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   const method = req.method ?? "GET";
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   const path = url.pathname;
@@ -145,7 +146,8 @@ const server = createServer((req, res) => {
       "Referrer-Policy": "no-referrer",
       "Cache-Control": "no-store",
     });
-    return res.end(JSON.stringify({ id, key }));
+    res.end(JSON.stringify({ id, key }));
+    return;
   }
 
   if (method === "GET") {
@@ -176,21 +178,7 @@ const server = createServer((req, res) => {
   }
 
   return secured(res, 404, CONTENT_TYPE.text, "not found");
-});
-
-const wss = new WebSocketServer({ noServer: true });
-
-server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-  const match = (req.url ?? "").split("?")[0].match(WS_PATH);
-  const session = match ? live(match[1]) : undefined;
-  if (!match || !session) {
-    socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
-    socket.destroy();
-    return;
-  }
-  const role: Role = match[2] === "broadcast" ? "broadcaster" : "viewer";
-  wss.handleUpgrade(req, socket, head, (ws) => bridge(ws, session.relay, role));
-});
+}
 
 function bridge(ws: WebSocket, relay: Relay, role: Role): void {
   const conn: Conn = {
@@ -222,24 +210,31 @@ function bridge(ws: WebSocket, relay: Relay, role: Role): void {
   ws.on("error", () => relay.close(conn));
 }
 
-// startServer binds and listens. Port/host come from CLI flags (--port/-p,
-// --host/-H) or the PORT/HOST env vars; flags win. Defaults: 0.0.0.0:8080.
+// startServer constructs and binds the relay. Doing all construction here (not
+// at import time) means importing this module has no side effects, so the CLI's
+// other commands don't spin up an HTTP/WebSocket server. Port/host come from CLI
+// flags (--port/-p, --host/-H) or the PORT/HOST env vars; flags win.
 export function startServer(argv: string[] = process.argv.slice(2)): void {
-  const flag = (names: string[]): string | undefined => {
-    for (let i = 0; i < argv.length; i++) {
-      for (const name of names) {
-        if (argv[i] === name) {
-          return argv[i + 1];
-        }
-        if (argv[i].startsWith(`${name}=`)) {
-          return argv[i].slice(name.length + 1);
-        }
-      }
+  const port = Number(flagValue(argv, "--port", "-p") ?? process.env.PORT) || 8080;
+  const host = flagValue(argv, "--host", "-H") ?? process.env.HOST ?? "0.0.0.0";
+
+  const server = createServer(handleRequest);
+  const wss = new WebSocketServer({ noServer: true });
+
+  server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    const match = (req.url ?? "").split("?")[0].match(WS_PATH);
+    const session = match ? live(match[1]) : undefined;
+    if (!match || !session) {
+      socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
     }
-    return undefined;
-  };
-  const port = Number(flag(["--port", "-p"]) ?? process.env.PORT) || 8080;
-  const host = flag(["--host", "-H"]) ?? process.env.HOST ?? "0.0.0.0";
+    const role: Role = match[2] === "broadcast" ? "broadcaster" : "viewer";
+    wss.handleUpgrade(req, socket, head, (ws) => bridge(ws, session.relay, role));
+  });
+
+  setInterval(evictStaleRateHits, RL_WINDOW_MS).unref();
+
   server.listen(port, host, () => {
     console.log(`ttyl relay (node) listening on http://${host}:${port}`);
   });

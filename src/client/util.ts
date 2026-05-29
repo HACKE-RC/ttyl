@@ -61,7 +61,7 @@ export async function resolveServer(flagValue: string): Promise<string> {
   }
   const cfg = await load();
   if (cfg.server) {
-    return cfg.server;
+    return validateServerURL(cfg.server);
   }
   process.stderr.write(
     `ttyl: no -server given and none configured; using ${DEFAULT_SERVER}\n` +
