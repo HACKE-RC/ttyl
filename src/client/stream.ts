@@ -68,7 +68,9 @@ export async function runStream(args: StreamArgs): Promise<void> {
       startedAt: Date.now(),
     },
     // `ttyl stop` (from another terminal) tears the session down via the same
-    // path as a normal exit.
+    // path as a normal exit. `cleanup` is declared below; this forward
+    // reference is safe only because the closure is never invoked before
+    // setup finishes, and nothing between here and its declaration awaits.
     () => cleanup(0),
   );
   // encoding: null makes the PTY emit raw Buffers, so binary / non-UTF-8 output

@@ -275,6 +275,9 @@ export class Relay {
         // fire onEnd, exactly as a broadcaster disconnect would.
         this.end();
         return;
+      default:
+        msg satisfies never; // exhaustiveness: every admin message is handled
+        return;
     }
   }
 

@@ -78,7 +78,21 @@ export async function runAdmin(args: AdminArgs): Promise<void> {
   });
 
   rl.on("line", (line) => {
-    handleCommand(line.trim(), ws, viewers);
+    const trimmed = line.trim();
+    // `end` is the one irreversible, everyone-affecting command, so confirm it
+    // before sending (the web dashboard guards it with a confirm() too).
+    if (trimmed === "end") {
+      rl.question("End the session for everyone? This stops the stream. [y/N] ", (answer) => {
+        if (/^y(es)?$/i.test(answer.trim())) {
+          ws.send(JSON.stringify({ type: "end" }));
+        } else {
+          process.stderr.write("ttyl: cancelled\n");
+        }
+        rl.prompt();
+      });
+      return;
+    }
+    handleCommand(trimmed, ws, viewers);
     rl.prompt();
   });
   rl.on("close", () => {
@@ -120,9 +134,6 @@ function handleCommand(line: string, ws: WebSocket, viewers: RosterEntry[]): voi
       } else {
         process.stderr.write("ttyl: usage: password <value> | password clear\n");
       }
-      return;
-    case "end":
-      ws.send(JSON.stringify({ type: "end" }));
       return;
     case "help":
       process.stderr.write(HELP);

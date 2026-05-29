@@ -3,12 +3,13 @@
 // socket (see control.ts), but `stop` sends a command instead of just reading.
 // With one running session it stops it; with several it requires an explicit
 // session id so you cannot tear down the wrong one by accident.
-import { listRunningSessions, requestStop } from "./control";
+import { listRunningSessions, type RunningSession, requestStop } from "./control";
 
 export async function runStop(selector?: string): Promise<void> {
   const sessions = await listRunningSessions();
   if (sessions.length === 0) {
     process.stderr.write("ttyl: no running session found.\n  Start one with: ttyl stream\n");
+    process.exitCode = 1;
     return;
   }
 
@@ -46,7 +47,7 @@ async function stopOne(pid: number, id: string): Promise<void> {
   }
 }
 
-function printSessions(sessions: Awaited<ReturnType<typeof listRunningSessions>>): void {
+function printSessions(sessions: RunningSession[]): void {
   for (const { info } of sessions) {
     const label = info.command || "session";
     process.stderr.write(`  ${info.id}  ${label}  (${info.cwd})\n`);

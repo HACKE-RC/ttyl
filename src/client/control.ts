@@ -148,10 +148,10 @@ export async function startControlServer(
         if (cmd === "stop" && onStop) {
           handled = true;
           clearTimeout(timer);
-          sock.end("ok\n");
-          // Defer so the ack flushes to the peer before onStop tears the
-          // control server (and the process) down.
-          setImmediate(() => onStop());
+          // Wait for the ack to be flushed to the peer before onStop tears the
+          // control server (and the process) down; otherwise `ttyl stop` can
+          // miss the "ok" and report a false failure.
+          sock.end("ok\n", () => onStop());
           return;
         }
         sendInfo();
@@ -245,27 +245,10 @@ export async function listSessions(): Promise<SessionInfo[]> {
 // resolving true once it acknowledges. Any failure (no listener, timeout, no
 // ack) resolves false so the caller can report it without throwing.
 export function requestStop(pid: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const sock = connect(listenPath(pid));
-    let data = "";
-    const timer = setTimeout(() => {
-      sock.destroy();
-      resolve(false);
-    }, QUERY_TIMEOUT_MS);
-    sock.setEncoding("utf8");
-    sock.on("connect", () => sock.write("stop\n"));
-    sock.on("data", (chunk: string) => {
-      data += chunk;
-    });
-    sock.on("end", () => {
-      clearTimeout(timer);
-      resolve(data.trim() === "ok");
-    });
-    sock.on("error", () => {
-      clearTimeout(timer);
-      resolve(false);
-    });
-  });
+  return request(pid, "stop").then(
+    (data) => data.trim() === "ok",
+    () => false,
+  );
 }
 
 // isDeadSocket is true only for errors that mean "nothing is listening here",
@@ -276,6 +259,20 @@ function isDeadSocket(err: unknown): boolean {
 }
 
 function query(pid: number): Promise<SessionInfo> {
+  return request(pid, "info").then((data) => {
+    try {
+      return JSON.parse(data) as SessionInfo;
+    } catch (e) {
+      throw e instanceof Error ? e : new Error("parse error");
+    }
+  });
+}
+
+// request opens the control socket for one command/response exchange and
+// resolves with the raw reply text. It rejects (preserving the original errno on
+// connection failures) so listRunningSessions can tell a dead socket from a
+// slow one; a timeout rejects without an errno so it is never mistaken for dead.
+function request(pid: number, command: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const sock = connect(listenPath(pid));
     let data = "";
@@ -284,17 +281,13 @@ function query(pid: number): Promise<SessionInfo> {
       reject(new Error("timeout")); // no errno code => not treated as dead
     }, QUERY_TIMEOUT_MS);
     sock.setEncoding("utf8");
-    sock.on("connect", () => sock.write("info\n"));
+    sock.on("connect", () => sock.write(`${command}\n`));
     sock.on("data", (chunk: string) => {
       data += chunk;
     });
     sock.on("end", () => {
       clearTimeout(timer);
-      try {
-        resolve(JSON.parse(data) as SessionInfo);
-      } catch (e) {
-        reject(e instanceof Error ? e : new Error("parse error"));
-      }
+      resolve(data);
     });
     sock.on("error", (e) => {
       clearTimeout(timer);
