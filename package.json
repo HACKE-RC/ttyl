@@ -1,0 +1,39 @@
+{
+  "name": "@rcx86/ttyl",
+  "version": "0.1.0",
+  "description": "Share your terminal with a link: a live, interactive terminal-sharing relay and client. Deploy the relay to Cloudflare or run it yourself; stream with the ttyl CLI.",
+  "type": "module",
+  "bin": {
+    "ttyl": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/cli.js --external:node-pty --external:ws --loader:.html=text --loader:.txt=text && chmod +x dist/cli.js",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "start": "node dist/cli.js serve",
+    "dev:node": "tsx src/cli.ts serve",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "node-pty": "^1.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250525.0",
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "esbuild": "^0.24.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.20.0"
+  }
+}

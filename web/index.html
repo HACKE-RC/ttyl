@@ -4,26 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ttyl</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css" />
+  <link rel="stylesheet" href="/static/xterm.css" />
   <style>
-    @font-face {
-      font-family: "JetBrains Mono";
-      src:
-        local("JetBrains Mono"),
-        url("https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.2.5/files/jetbrains-mono-latin-400-normal.woff2") format("woff2");
-      font-style: normal;
-      font-weight: 400;
-      font-display: swap;
-    }
-    @font-face {
-      font-family: "Symbols Nerd Font Mono";
-      src:
-        local("Symbols Nerd Font Mono"),
-        url("https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@v3.4.0/patched-fonts/NerdFontsSymbolsOnly/SymbolsNerdFontMono-Regular.ttf") format("truetype");
-      font-style: normal;
-      font-weight: 400;
-      font-display: swap;
-    }
+    /* Fonts are not loaded from any third party. The viewer uses locally
+       installed monospace fonts when present, falling back to the system
+       monospace, so the page makes no cross-origin requests. */
     html, body {
       margin: 0;
       height: 100%;
@@ -83,7 +68,7 @@
 <body>
   <div id="fit"><div id="terminal"></div></div>
   <div id="status"><span class="dot"></span><span id="status-text">connecting...</span></div>
-  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
-  <script src="/static/viewer.js?v=fit-no-overflow"></script>
+  <script src="/static/xterm.js"></script>
+  <script src="/static/viewer.js?v=secure-fragment"></script>
 </body>
 </html>

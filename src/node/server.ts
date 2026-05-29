@@ -4,7 +4,6 @@
 // registry; a timer enforces the TTL; a sliding-window counter rate limits
 // session creation. Run with: npm run start  (PORT, SESSION_TTL_SECONDS env).
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { readFileSync } from "node:fs";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 import { Relay, type Conn, type Role } from "../core/relay";
@@ -17,11 +16,11 @@ import {
   VIEWER_PATH,
   WS_PATH,
 } from "../core/http";
+import indexHtml from "../../web/index.html";
+import viewerJs from "../../web/viewer.client.txt";
+import xtermJs from "../../web/vendor/xterm.lib.txt";
+import xtermCss from "../../web/vendor/xterm.style.txt";
 
-// Bind address is configurable via CLI flags (--port/-p, --host/-H) or the
-// PORT/HOST env vars; flags win. Defaults: 0.0.0.0:8080.
-const PORT = Number(argValue(["--port", "-p"]) ?? process.env.PORT) || 8080;
-const HOST = argValue(["--host", "-H"]) ?? process.env.HOST ?? "0.0.0.0";
 // The default session lifetime in ms (shared TTL policy; env-configurable).
 const DEFAULT_TTL_MS = resolveTtlSeconds(undefined, process.env.SESSION_TTL_SECONDS) * 1000;
 // Trust X-Forwarded-For for the client IP only when explicitly behind a proxy,
@@ -33,28 +32,12 @@ const RL_WINDOW_MS = 60_000;
 // "never expire" sessions).
 const CONNECT_GRACE_MS = 2 * 60 * 1000;
 
-function argValue(names: string[]): string | undefined {
-  const argv = process.argv.slice(2);
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    for (const name of names) {
-      if (arg === name) {
-        return argv[i + 1];
-      }
-      if (arg.startsWith(`${name}=`)) {
-        return arg.slice(name.length + 1);
-      }
-    }
-  }
-  return undefined;
-}
-
-const webDir = new URL("../../web/", import.meta.url);
+// Assets are embedded at build time (no third-party CDN, no runtime disk reads).
 const ASSETS = {
-  index: readFileSync(new URL("index.html", webDir), "utf8"),
-  viewer: readFileSync(new URL("viewer.client.txt", webDir), "utf8"),
-  xtermJs: readFileSync(new URL("vendor/xterm.lib.txt", webDir), "utf8"),
-  xtermCss: readFileSync(new URL("vendor/xterm.style.txt", webDir), "utf8"),
+  index: indexHtml,
+  viewer: viewerJs,
+  xtermJs,
+  xtermCss,
 };
 
 interface Session {
@@ -239,6 +222,25 @@ function bridge(ws: WebSocket, relay: Relay, role: Role): void {
   ws.on("error", () => relay.close(conn));
 }
 
-server.listen(PORT, HOST, () => {
-  console.log(`ttyl relay (node) listening on http://${HOST}:${PORT}`);
-});
+// startServer binds and listens. Port/host come from CLI flags (--port/-p,
+// --host/-H) or the PORT/HOST env vars; flags win. Defaults: 0.0.0.0:8080.
+export function startServer(argv: string[] = process.argv.slice(2)): void {
+  const flag = (names: string[]): string | undefined => {
+    for (let i = 0; i < argv.length; i++) {
+      for (const name of names) {
+        if (argv[i] === name) {
+          return argv[i + 1];
+        }
+        if (argv[i].startsWith(`${name}=`)) {
+          return argv[i].slice(name.length + 1);
+        }
+      }
+    }
+    return undefined;
+  };
+  const port = Number(flag(["--port", "-p"]) ?? process.env.PORT) || 8080;
+  const host = flag(["--host", "-H"]) ?? process.env.HOST ?? "0.0.0.0";
+  server.listen(port, host, () => {
+    console.log(`ttyl relay (node) listening on http://${host}:${port}`);
+  });
+}
