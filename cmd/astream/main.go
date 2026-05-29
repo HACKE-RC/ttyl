@@ -3,8 +3,9 @@
 //
 // Usage:
 //
-//	astream serve  [-addr :8080] [-public-url http://host:8080]
-//	astream stream [-server http://localhost:8080] [-- command args...]
+//	astream serve  [-addr :8080]
+//	astream init   [-server http://host:8080]
+//	astream stream [-server http://host:8080] [-- command args...]
 package main
 
 import (
@@ -32,6 +33,8 @@ func main() {
 	switch cmd {
 	case "serve":
 		err = server.Run(ctx, args)
+	case "init":
+		err = client.Init(ctx, args)
 	case "stream":
 		err = client.Run(ctx, args)
 	case "-h", "--help", "help":
@@ -54,6 +57,7 @@ func usage() {
 
 Commands:
   serve    Run the relay/web server
+  init     Save the default relay server URL to your config file
   stream   Wrap a shell in a PTY and stream it to a server
 
 Run "astream <command> -h" for command-specific flags.

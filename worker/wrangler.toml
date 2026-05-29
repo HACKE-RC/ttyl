@@ -1,0 +1,41 @@
+name = "astream-relay"
+main = "src/worker/index.ts"
+compatibility_date = "2025-06-01"
+workers_dev = true
+
+# Local dev bind address (npm run dev). Override per-run with, e.g.,
+# `npm run dev -- --port 1234 --ip 0.0.0.0`. The deployed Worker is served on
+# your *.workers.dev domain (port 443) and is unaffected by these.
+[dev]
+ip = "127.0.0.1"
+port = 8787
+
+# The viewer page (web/index.html), its script (web/viewer.client.txt), and the
+# self-hosted xterm assets (web/vendor/*.txt) are bundled as text modules via
+# Wrangler's default Text rule (**/*.html, **/*.txt) and served from the Worker,
+# mirroring the Go binary's embedded assets. No third-party CDN is used.
+
+# Maximum session lifetime in seconds (clamped 60..86400). After this, the
+# session's Durable Object alarm ends it and its links stop working.
+[vars]
+SESSION_TTL_SECONDS = "28800"
+
+# Anti-abuse limit on session creation, keyed by client IP. limit calls per
+# period (period must be 10 or 60). Coarse protection, not a billing system.
+[[ratelimits]]
+name = "SESSION_LIMITER"
+namespace_id = "1001"
+  [ratelimits.simple]
+  limit = 20
+  period = 60
+
+# One Durable Object instance per session ID holds the live relay state:
+# broadcaster/viewer sockets, scrollback, and the last resize.
+[[durable_objects.bindings]]
+name = "SESSION"
+class_name = "SessionRelay"
+
+# SQLite-backed Durable Objects are required on the Workers Free plan.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SessionRelay"]

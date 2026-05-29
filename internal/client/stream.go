@@ -13,13 +13,20 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/rc/astream/internal/config"
 	"github.com/rc/astream/internal/wire"
 	"golang.org/x/sync/errgroup"
 )
+
+// defaultServer is the relay URL used when none is configured or passed.
+const defaultServer = "http://localhost:8080"
 
 // channel buffers for the input fan-in and outbound frame fan-out.
 const (
@@ -28,26 +35,89 @@ const (
 	readChunk    = 4096
 )
 
-// Run parses stream flags, creates a remote session, and streams the local PTY
-// until the command exits or ctx is cancelled.
-func Run(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("stream", flag.ContinueOnError)
-	server := fs.String("server", "http://localhost:8080", "astream server base URL")
+// Init handles `astream init`: it saves the relay server URL (and any other
+// client settings) to the per-user config file so `astream stream` can be run
+// without -server. With no -server flag it prints the current configuration.
+func Init(_ context.Context, args []string) error {
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	server := fs.String("server", "", "default astream relay server base URL to save")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	id, err := createSession(ctx, *server)
+	if *server == "" {
+		cur, err := config.Load()
+		if err != nil {
+			return err
+		}
+		path, _ := config.Path()
+		if cur.Server == "" {
+			fmt.Fprintf(os.Stderr, "no server configured. Set one with:\n  astream init -server <url>\n")
+		} else {
+			fmt.Fprintf(os.Stderr, "configured server: %s\n  (%s)\n", cur.Server, path)
+		}
+		return nil
+	}
+
+	normalized, err := validateServerURL(*server)
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	cfg.Server = normalized
+	path, err := config.Save(cfg)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "saved server %s to %s\n", cfg.Server, path)
+	return nil
+}
+
+// Run parses stream flags, creates a remote session, and streams the local PTY
+// until the command exits or ctx is cancelled.
+func Run(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("stream", flag.ContinueOnError)
+	server := fs.String("server", "", "astream server base URL (overrides saved config)")
+	viewOnly := fs.Bool("view-only", false, "only share a view-only link; viewers cannot type")
+	lifetime := fs.String("lifetime", "", "max session lifetime, e.g. 30m, 8h, 2d, or 'never' (default: server's setting)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	ttl, err := parseLifetime(*lifetime)
+	if err != nil {
+		return err
+	}
+
+	resolved, err := resolveServer(*server)
+	if err != nil {
+		return err
+	}
+
+	id, key, err := createSession(ctx, resolved, ttl)
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
 	}
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, broadcastURL(*server, id), nil)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, broadcastURL(resolved, id), nil)
 	if err != nil {
 		return fmt.Errorf("connect to server: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "astream: streaming live at %s/s/%s\r\n", strings.TrimRight(*server, "/"), id)
+	// Prove read-write capability with an Auth frame as the very first message,
+	// before any output. The key travels in the WebSocket body, never in the
+	// URL. Legacy servers that issue no key skip this and are unaffected.
+	if key != "" {
+		if err := conn.WriteMessage(websocket.BinaryMessage, wire.Encode(wire.Frame{Kind: wire.Auth, Data: []byte(key)})); err != nil {
+			_ = conn.Close()
+			return fmt.Errorf("authenticate: %w", err)
+		}
+	}
+
+	printLinks(os.Stderr, resolved, id, key, *viewOnly)
 
 	t, err := startTerminal(fs.Args())
 	if err != nil {
@@ -218,30 +288,129 @@ func readStdin(ctx context.Context, inputCh chan<- []byte) {
 	}
 }
 
-func createSession(ctx context.Context, server string) (string, error) {
-	endpoint := strings.TrimRight(server, "/") + "/api/sessions"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+// validateServerURL checks that s is an http(s) URL with a host and returns it
+// trimmed of a trailing slash. url.Parse alone is too lax (it accepts bare
+// words like "foo"), so we assert the scheme and host explicitly.
+func validateServerURL(s string) (string, error) {
+	u, err := url.Parse(s)
+	if err != nil {
+		return "", fmt.Errorf("invalid server URL %q: %w", s, err)
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", fmt.Errorf("invalid server URL %q: expected http://host or https://host", s)
+	}
+	return strings.TrimRight(s, "/"), nil
+}
+
+// resolveServer picks the relay URL: an explicit -server flag wins, otherwise
+// the saved config value, otherwise the built-in default. It nudges the user
+// toward `astream init` when falling back to the default.
+func resolveServer(flagValue string) (string, error) {
+	if flagValue != "" {
+		return strings.TrimRight(flagValue, "/"), nil
+	}
+	cfg, err := config.Load()
 	if err != nil {
 		return "", err
+	}
+	if cfg.Server != "" {
+		return cfg.Server, nil
+	}
+	fmt.Fprintf(os.Stderr, "astream: no -server given and none configured; using %s\n", defaultServer)
+	fmt.Fprintf(os.Stderr, "astream: set a default with: astream init -server <url>\n")
+	return defaultServer, nil
+}
+
+// lifetimeUnset signals that no -lifetime was given, so the server should use
+// its own default. A value of 0 means "never expire"; positive values are
+// seconds.
+const lifetimeUnset = -1
+
+// parseLifetime turns a human duration into seconds. It accepts Go-style units
+// (s, m, h) plus days (d) and combinations like "1d12h", and the special value
+// "never" (or "none"/"0") meaning no expiry. An empty string leaves it unset so
+// the server's default applies.
+func parseLifetime(s string) (int64, error) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return lifetimeUnset, nil
+	}
+	if s == "never" || s == "none" {
+		return 0, nil
+	}
+
+	// Expand any "<n>d" day segments into hours so time.ParseDuration can take
+	// over (it understands h/m/s but not d).
+	expanded := dayPattern.ReplaceAllStringFunc(s, func(seg string) string {
+		days, _ := strconv.Atoi(strings.TrimSuffix(seg, "d"))
+		return strconv.Itoa(days*24) + "h"
+	})
+	d, err := time.ParseDuration(expanded)
+	if err != nil {
+		return 0, fmt.Errorf("invalid -lifetime %q: use values like 30m, 8h, 2d, or 'never'", s)
+	}
+	if d <= 0 {
+		return 0, nil
+	}
+	return int64(d.Seconds()), nil
+}
+
+var dayPattern = regexp.MustCompile(`\d+d`)
+
+// createSession creates a remote session and returns its id and control key.
+// The key separates read-write from view-only access; servers without that
+// capability (the legacy Go relay) return an empty key, in which case the
+// client falls back to a single shareable link.
+func createSession(ctx context.Context, server string, ttl int64) (id, key string, err error) {
+	endpoint := strings.TrimRight(server, "/") + "/api/sessions"
+	if ttl != lifetimeUnset {
+		endpoint += "?ttl=" + strconv.FormatInt(ttl, 10)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return "", "", err
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("server returned %s", resp.Status)
+		return "", "", fmt.Errorf("server returned %s", resp.Status)
 	}
 	var body struct {
-		ID string `json:"id"`
+		ID  string `json:"id"`
+		Key string `json:"key"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if body.ID == "" {
-		return "", fmt.Errorf("server returned empty session id")
+		return "", "", fmt.Errorf("server returned empty session id")
 	}
-	return body.ID, nil
+	return body.ID, body.Key, nil
+}
+
+// printLinks writes the shareable session URLs. With a control key the server
+// supports view-only sharing: -view-only prints just the view-only link, while
+// the default prints both the read-write and view-only links. Without a key the
+// server has no view-only concept, so a single link is printed.
+func printLinks(w io.Writer, server, id, key string, viewOnly bool) {
+	base := strings.TrimRight(server, "/")
+	if key == "" {
+		fmt.Fprintf(w, "astream: streaming live at %s/s/%s\r\n", base, id)
+		return
+	}
+	if viewOnly {
+		fmt.Fprintf(w, "astream: streaming live (view-only)\r\n")
+		fmt.Fprintf(w, "  view-only: %s/s/%s\r\n", base, id)
+		return
+	}
+	// The control key rides in the URL fragment (#key): browsers never send it
+	// to the server, so it stays out of logs and history.
+	fmt.Fprintf(w, "astream: streaming live\r\n")
+	fmt.Fprintf(w, "  read-write: %s/s/%s#%s\r\n", base, id, key)
+	fmt.Fprintf(w, "  view-only:  %s/s/%s\r\n", base, id)
 }
 
 func broadcastURL(server, id string) string {

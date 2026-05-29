@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>astream</title>
+  <link rel="stylesheet" href="/static/xterm.css" />
+  <style>
+    /* Fonts are not loaded from any third party. The viewer uses locally
+       installed monospace fonts when present, falling back to the system
+       monospace, so the page makes no cross-origin requests. */
+    html, body {
+      margin: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #0b0e14;
+      color: #c8d3f5;
+      font-family: "JetBrains Mono", "Symbols Nerd Font Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+    }
+    #status {
+      box-sizing: border-box;
+      flex: 0 0 24px;
+      height: 24px;
+      padding: 4px 10px;
+      font-size: 12px;
+      line-height: 16px;
+      border-top: 1px solid #1b2230;
+      background: #11141c;
+      color: #8f9bb3;
+      white-space: nowrap;
+    }
+    #status .dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 8px;
+      background: #f7768e;
+      vertical-align: middle;
+    }
+    #status.live .dot { background: #9ece6a; }
+    /* Holds the terminal grid and gives it the available tab area above the
+       status line. The grid keeps the broadcaster's exact dimensions (so
+       wrapping matches the source); the font is sized in JS to fit this box. */
+    #fit {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: hidden;
+    }
+    #terminal {
+      /* Size to the grid's natural extent so the font fit can measure it. */
+      width: max-content;
+    }
+    /* Hide xterm's reserved viewport scrollbar track for a clean edge; mouse
+       wheel scrollback still works. */
+    .xterm-viewport {
+      scrollbar-width: none;
+    }
+    .xterm-viewport::-webkit-scrollbar {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="fit"><div id="terminal"></div></div>
+  <div id="status"><span class="dot"></span><span id="status-text">connecting...</span></div>
+  <script src="/static/xterm.js"></script>
+  <script src="/static/viewer.js?v=secure-fragment"></script>
+</body>
+</html>

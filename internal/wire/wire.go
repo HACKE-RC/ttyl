@@ -21,6 +21,10 @@ const (
 	Input
 	// Resize carries the broadcaster's authoritative terminal dimensions.
 	Resize
+	// Auth is the first frame a socket sends; its payload is the control key
+	// (UTF-8), or empty for a view-only viewer. It keeps the key out of the
+	// connection URL, and therefore out of request logs and browser history.
+	Auth
 )
 
 // resizePayloadLen is the fixed payload size of a Resize frame: two uint16s.
@@ -44,7 +48,7 @@ type Frame struct {
 // the payload. The returned slice is freshly allocated and owned by the caller.
 func Encode(f Frame) []byte {
 	switch f.Kind {
-	case Output, Input:
+	case Output, Input, Auth:
 		buf := make([]byte, 1+len(f.Data))
 		buf[0] = byte(f.Kind)
 		copy(buf[1:], f.Data)
@@ -69,7 +73,7 @@ func Decode(buf []byte) (Frame, error) {
 	kind := Kind(buf[0])
 	payload := buf[1:]
 	switch kind {
-	case Output, Input:
+	case Output, Input, Auth:
 		data := make([]byte, len(payload))
 		copy(data, payload)
 		return Frame{Kind: kind, Data: data}, nil
