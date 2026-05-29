@@ -2,10 +2,7 @@
 
 Share your terminal with a link.
 
-`ttyl` streams a live terminal session to anyone with the URL. They watch in
-their browser as it happens, and if you give them the right link, they can type
-back into your session too. It's like screen-sharing for the terminal, except
-there's nothing for the other person to install. They just open a link.
+`ttyl` lets you stream your terminal session as a URL, with read-only or full access.
 
 What you get:
 
@@ -59,6 +56,8 @@ ttyl init -server https://ttyl-relay.<you>.workers.dev
 ttyl stream
 ```
 
+#### View-only or read-write
+
 It prints two links:
 
 ```
@@ -76,6 +75,8 @@ If you don't want anyone typing, hand out just the view-only link:
 ttyl stream -view-only
 ```
 
+#### Lifetime
+
 The session ends when you exit your shell. It also expires on its own after a
 while; set how long with `-lifetime`:
 
@@ -85,6 +86,8 @@ ttyl stream -lifetime never    # only ends when you disconnect
 ```
 
 Without the flag, the relay's own default applies (8 hours).
+
+#### Saved server config
 
 `ttyl init` saves the server to a config file in your OS's usual spot
 (`~/.config/ttyl/` on Linux, `~/Library/Application Support/ttyl/` on
