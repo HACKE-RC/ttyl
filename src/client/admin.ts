@@ -20,6 +20,7 @@ const HELP = `commands:
   lock | unlock     stop / allow new viewers joining
   password <value>  set a session password (gates all viewers)
   password clear    remove the session password
+  end               end the session for everyone (stops the stream)
   help              show this help
   quit              leave the console (the session keeps running)
 `;
@@ -77,7 +78,21 @@ export async function runAdmin(args: AdminArgs): Promise<void> {
   });
 
   rl.on("line", (line) => {
-    handleCommand(line.trim(), ws, viewers);
+    const trimmed = line.trim();
+    // `end` is the one irreversible, everyone-affecting command, so confirm it
+    // before sending (the web dashboard guards it with a confirm() too).
+    if (trimmed === "end") {
+      rl.question("End the session for everyone? This stops the stream. [y/N] ", (answer) => {
+        if (/^y(es)?$/i.test(answer.trim())) {
+          ws.send(JSON.stringify({ type: "end" }));
+        } else {
+          process.stderr.write("ttyl: cancelled\n");
+        }
+        rl.prompt();
+      });
+      return;
+    }
+    handleCommand(trimmed, ws, viewers);
     rl.prompt();
   });
   rl.on("close", () => {

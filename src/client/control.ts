@@ -92,11 +92,21 @@ function listenPath(pid: number): string {
   return markerPath(pid);
 }
 
+// A request is a single newline-terminated command sent by a connecting client:
+// "info" (the default) asks for the session JSON; "stop" asks the broadcaster to
+// shut down. The protocol is backward compatible: an empty or unknown command,
+// or one that never arrives, is treated as "info".
+const REQUEST_TIMEOUT_MS = 200;
+
 // startControlServer publishes info on this process's control socket and returns
 // a cleanup function that closes and removes it. It never throws: if the channel
 // cannot be created (or the dir is not trustworthy), recovery via `ttyl links`
-// is simply unavailable.
-export async function startControlServer(info: SessionInfo): Promise<() => Promise<void>> {
+// is simply unavailable. The optional onStop is invoked when a peer sends the
+// "stop" command (see `ttyl stop`); it should tear the broadcaster down.
+export async function startControlServer(
+  info: SessionInfo,
+  onStop?: () => void,
+): Promise<() => Promise<void>> {
   const noop = async (): Promise<void> => {};
   const dir = await secureDir(true);
   if (!dir) {
@@ -111,7 +121,42 @@ export async function startControlServer(info: SessionInfo): Promise<() => Promi
 
     const payload = JSON.stringify(info);
     const server = createServer((sock: Socket) => {
-      sock.end(payload);
+      sock.setEncoding("utf8");
+      let buf = "";
+      let handled = false;
+      const sendInfo = (): void => {
+        if (handled) {
+          return;
+        }
+        handled = true;
+        clearTimeout(timer);
+        sock.end(payload);
+      };
+      // A peer that connects but says nothing (e.g. an older client) gets the
+      // info payload, preserving the original read-only behavior.
+      const timer = setTimeout(sendInfo, REQUEST_TIMEOUT_MS);
+      sock.on("data", (chunk: string) => {
+        if (handled) {
+          return;
+        }
+        buf += chunk;
+        const nl = buf.indexOf("\n");
+        if (nl === -1) {
+          return;
+        }
+        const cmd = buf.slice(0, nl).trim();
+        if (cmd === "stop" && onStop) {
+          handled = true;
+          clearTimeout(timer);
+          // Wait for the ack to be flushed to the peer before onStop tears the
+          // control server (and the process) down; otherwise `ttyl stop` can
+          // miss the "ok" and report a false failure.
+          sock.end("ok\n", () => onStop());
+          return;
+        }
+        sendInfo();
+      });
+      sock.on("error", () => clearTimeout(timer));
     });
     server.on("error", () => {}); // best effort; ignore late socket errors
 
@@ -145,10 +190,17 @@ export async function startControlServer(info: SessionInfo): Promise<() => Promi
   }
 }
 
-// listSessions discovers every running broadcaster for this user, querying each
-// control socket in parallel. A socket that is refused/missing is stale and gets
-// pruned; one that merely answers slowly is left alone.
-export async function listSessions(): Promise<SessionInfo[]> {
+// RunningSession pairs a discovered session with the pid of its broadcaster, so
+// callers (e.g. `ttyl stop`) can address the right control socket.
+export interface RunningSession {
+  pid: number;
+  info: SessionInfo;
+}
+
+// listRunningSessions discovers every running broadcaster for this user,
+// querying each control socket in parallel. A socket that is refused/missing is
+// stale and gets pruned; one that merely answers slowly is left alone.
+export async function listRunningSessions(): Promise<RunningSession[]> {
   const dir = await secureDir(false);
   if (!dir) {
     return [];
@@ -160,28 +212,43 @@ export async function listSessions(): Promise<SessionInfo[]> {
     .map((x) => ({ entry: x.entry, pid: Number(x.match[1]) }));
 
   type QueryResult =
-    | { ok: true; info: SessionInfo }
+    | { ok: true; session: RunningSession }
     | { ok: false; entry: string; err: unknown };
   const results = await Promise.all(
     found.map(async ({ entry, pid }): Promise<QueryResult> => {
       try {
-        return { ok: true, info: await query(pid) };
+        return { ok: true, session: { pid, info: await query(pid) } };
       } catch (err) {
         return { ok: false, entry, err };
       }
     }),
   );
 
-  const sessions: SessionInfo[] = [];
+  const sessions: RunningSession[] = [];
   for (const r of results) {
     if (r.ok) {
-      sessions.push(r.info);
+      sessions.push(r.session);
     } else if (isDeadSocket(r.err)) {
       await unlink(join(dir, r.entry)).catch(() => {});
     }
   }
-  sessions.sort((a, b) => a.startedAt - b.startedAt);
+  sessions.sort((a, b) => a.info.startedAt - b.info.startedAt);
   return sessions;
+}
+
+// listSessions is the info-only view used by `ttyl links`.
+export async function listSessions(): Promise<SessionInfo[]> {
+  return (await listRunningSessions()).map((s) => s.info);
+}
+
+// requestStop asks the broadcaster on a given pid's control socket to shut down,
+// resolving true once it acknowledges. Any failure (no listener, timeout, no
+// ack) resolves false so the caller can report it without throwing.
+export function requestStop(pid: number): Promise<boolean> {
+  return request(pid, "stop").then(
+    (data) => data.trim() === "ok",
+    () => false,
+  );
 }
 
 // isDeadSocket is true only for errors that mean "nothing is listening here",
@@ -192,6 +259,20 @@ function isDeadSocket(err: unknown): boolean {
 }
 
 function query(pid: number): Promise<SessionInfo> {
+  return request(pid, "info").then((data) => {
+    try {
+      return JSON.parse(data) as SessionInfo;
+    } catch (e) {
+      throw e instanceof Error ? e : new Error("parse error");
+    }
+  });
+}
+
+// request opens the control socket for one command/response exchange and
+// resolves with the raw reply text. It rejects (preserving the original errno on
+// connection failures) so listRunningSessions can tell a dead socket from a
+// slow one; a timeout rejects without an errno so it is never mistaken for dead.
+function request(pid: number, command: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const sock = connect(listenPath(pid));
     let data = "";
@@ -200,16 +281,13 @@ function query(pid: number): Promise<SessionInfo> {
       reject(new Error("timeout")); // no errno code => not treated as dead
     }, QUERY_TIMEOUT_MS);
     sock.setEncoding("utf8");
+    sock.on("connect", () => sock.write(`${command}\n`));
     sock.on("data", (chunk: string) => {
       data += chunk;
     });
     sock.on("end", () => {
       clearTimeout(timer);
-      try {
-        resolve(JSON.parse(data) as SessionInfo);
-      } catch (e) {
-        reject(e instanceof Error ? e : new Error("parse error"));
-      }
+      resolve(data);
     });
     sock.on("error", (e) => {
       clearTimeout(timer);

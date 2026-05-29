@@ -6,7 +6,13 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { listSessions, startControlServer, type SessionInfo } from "../src/client/control";
+import {
+  listRunningSessions,
+  listSessions,
+  requestStop,
+  startControlServer,
+  type SessionInfo,
+} from "../src/client/control";
 
 const oldRuntime = process.env.XDG_RUNTIME_DIR;
 let runtimeDir = "";
@@ -34,6 +40,32 @@ describe("local control socket", () => {
     await stop();
     expect(await listSessions()).toEqual([]);
     expect(await controlEntries()).toEqual([]);
+  });
+
+  it("stops a running session via the stop command and acknowledges", async () => {
+    const info = sessionInfo();
+    let stopped = false;
+    const stop = await startControlServer(info, () => {
+      stopped = true;
+    });
+
+    const running = await listRunningSessions();
+    expect(running).toHaveLength(1);
+    expect(running[0].info).toEqual(info);
+
+    const ok = await requestStop(running[0].pid);
+    expect(ok).toBe(true);
+    // onStop runs on a deferred tick after the ack; let it settle.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(stopped).toBe(true);
+
+    // info / listSessions still work over the same protocol.
+    expect(await listSessions()).toEqual([info]);
+    await stop();
+  });
+
+  it("reports failure when stopping a pid with no listener", async () => {
+    expect(await requestStop(999_993)).toBe(false);
   });
 
   it("refuses to use a group/world-accessible runtime dir", async () => {

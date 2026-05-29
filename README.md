@@ -21,7 +21,7 @@ Install the CLI globally via npm:
 npm install -g @rcx86/ttyl
 ```
 
-This installs the `ttyl` executable, which provides the `stream`, `init`, `serve`, `admin`, and `links` commands.
+This installs the `ttyl` executable, which provides the `stream`, `init`, `serve`, `admin`, `links`, and `stop` commands.
 
 ---
 
@@ -94,6 +94,19 @@ Sessions terminate immediately upon shell exit. They also enforce a maximum life
 ttyl stream --lifetime 2d       # Accepts formats like 30m, 6h, 8h, 2d, 1d12h
 ttyl stream --lifetime never    # Disables automatic expiration
 ```
+
+### Stopping a Session
+
+A session normally ends when its shell exits. To stop a running stream without touching its terminal, open a separate terminal on the same machine and run:
+
+```bash
+ttyl stop                # Stops the session if exactly one is running
+ttyl stop <session-id>   # Required when several sessions are running
+```
+
+If multiple sessions are running, `ttyl stop` lists them with their ids so you can choose which to stop.
+
+A session can also be ended remotely from the dashboard ("End session") or the admin console (the `end` command), which stops the stream for the owner and all viewers.
 
 ---
 

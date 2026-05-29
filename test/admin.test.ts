@@ -25,6 +25,7 @@ describe("admin control-plane parsing", () => {
       type: "password",
       clear: true,
     });
+    expect(parseAdminMessage(JSON.stringify({ type: "end" }))).toEqual({ type: "end" });
   });
 
   it("returns null for malformed or unknown messages", () => {

@@ -270,6 +270,14 @@ export class Relay {
           void this.setPassword(msg.value);
         }
         return;
+      case "end":
+        // Owner-initiated shutdown: close everyone (broadcaster included) and
+        // fire onEnd, exactly as a broadcaster disconnect would.
+        this.end();
+        return;
+      default:
+        msg satisfies never; // exhaustiveness: every admin message is handled
+        return;
     }
   }
 
