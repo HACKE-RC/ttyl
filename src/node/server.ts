@@ -4,7 +4,6 @@
 // registry; a timer enforces the TTL; a sliding-window counter rate limits
 // session creation. Run with: npm run start  (PORT, SESSION_TTL_SECONDS env).
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { readFileSync } from "node:fs";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 import { Relay, type Conn, type Role } from "../core/relay";
@@ -17,11 +16,12 @@ import {
   VIEWER_PATH,
   WS_PATH,
 } from "../core/http";
+import { flagValue } from "../args";
+import indexHtml from "../../web/index.html";
+import viewerJs from "../../web/viewer.client.txt";
+import xtermJs from "../../web/vendor/xterm.lib.txt";
+import xtermCss from "../../web/vendor/xterm.style.txt";
 
-// Bind address is configurable via CLI flags (--port/-p, --host/-H) or the
-// PORT/HOST env vars; flags win. Defaults: 0.0.0.0:8080.
-const PORT = Number(argValue(["--port", "-p"]) ?? process.env.PORT) || 8080;
-const HOST = argValue(["--host", "-H"]) ?? process.env.HOST ?? "0.0.0.0";
 // The default session lifetime in ms (shared TTL policy; env-configurable).
 const DEFAULT_TTL_MS = resolveTtlSeconds(undefined, process.env.SESSION_TTL_SECONDS) * 1000;
 // Trust X-Forwarded-For for the client IP only when explicitly behind a proxy,
@@ -33,28 +33,12 @@ const RL_WINDOW_MS = 60_000;
 // "never expire" sessions).
 const CONNECT_GRACE_MS = 2 * 60 * 1000;
 
-function argValue(names: string[]): string | undefined {
-  const argv = process.argv.slice(2);
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    for (const name of names) {
-      if (arg === name) {
-        return argv[i + 1];
-      }
-      if (arg.startsWith(`${name}=`)) {
-        return arg.slice(name.length + 1);
-      }
-    }
-  }
-  return undefined;
-}
-
-const webDir = new URL("../../web/", import.meta.url);
+// Assets are embedded at build time (no third-party CDN, no runtime disk reads).
 const ASSETS = {
-  index: readFileSync(new URL("index.html", webDir), "utf8"),
-  viewer: readFileSync(new URL("viewer.client.txt", webDir), "utf8"),
-  xtermJs: readFileSync(new URL("vendor/xterm.lib.txt", webDir), "utf8"),
-  xtermCss: readFileSync(new URL("vendor/xterm.style.txt", webDir), "utf8"),
+  index: indexHtml,
+  viewer: viewerJs,
+  xtermJs,
+  xtermCss,
 };
 
 interface Session {
@@ -88,16 +72,16 @@ function allow(ip: string): boolean {
   return true;
 }
 
-// Periodically drop rate-limit buckets with no recent hits so the map cannot
-// grow without bound across many distinct client IPs.
-setInterval(() => {
+// Drop rate-limit buckets with no recent hits so the map cannot grow without
+// bound across many distinct client IPs. Scheduled by startServer.
+function evictStaleRateHits(): void {
   const cutoff = Date.now() - RL_WINDOW_MS;
   for (const [ip, hits] of rateHits) {
     if (hits.every((t) => t <= cutoff)) {
       rateHits.delete(ip);
     }
   }
-}, RL_WINDOW_MS).unref();
+}
 
 function secured(
   res: ServerResponse,
@@ -147,7 +131,7 @@ function live(id: string): Session | undefined {
   return s && !s.relay.ended ? s : undefined;
 }
 
-const server = createServer((req, res) => {
+function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   const method = req.method ?? "GET";
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   const path = url.pathname;
@@ -162,7 +146,8 @@ const server = createServer((req, res) => {
       "Referrer-Policy": "no-referrer",
       "Cache-Control": "no-store",
     });
-    return res.end(JSON.stringify({ id, key }));
+    res.end(JSON.stringify({ id, key }));
+    return;
   }
 
   if (method === "GET") {
@@ -193,21 +178,7 @@ const server = createServer((req, res) => {
   }
 
   return secured(res, 404, CONTENT_TYPE.text, "not found");
-});
-
-const wss = new WebSocketServer({ noServer: true });
-
-server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-  const match = (req.url ?? "").split("?")[0].match(WS_PATH);
-  const session = match ? live(match[1]) : undefined;
-  if (!match || !session) {
-    socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
-    socket.destroy();
-    return;
-  }
-  const role: Role = match[2] === "broadcast" ? "broadcaster" : "viewer";
-  wss.handleUpgrade(req, socket, head, (ws) => bridge(ws, session.relay, role));
-});
+}
 
 function bridge(ws: WebSocket, relay: Relay, role: Role): void {
   const conn: Conn = {
@@ -239,6 +210,32 @@ function bridge(ws: WebSocket, relay: Relay, role: Role): void {
   ws.on("error", () => relay.close(conn));
 }
 
-server.listen(PORT, HOST, () => {
-  console.log(`ttyl relay (node) listening on http://${HOST}:${PORT}`);
-});
+// startServer constructs and binds the relay. Doing all construction here (not
+// at import time) means importing this module has no side effects, so the CLI's
+// other commands don't spin up an HTTP/WebSocket server. Port/host come from CLI
+// flags (--port/-p, --host/-H) or the PORT/HOST env vars; flags win.
+export function startServer(argv: string[] = process.argv.slice(2)): void {
+  const port = Number(flagValue(argv, "--port", "-p") ?? process.env.PORT) || 8080;
+  const host = flagValue(argv, "--host", "-H") ?? process.env.HOST ?? "0.0.0.0";
+
+  const server = createServer(handleRequest);
+  const wss = new WebSocketServer({ noServer: true });
+
+  server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    const match = (req.url ?? "").split("?")[0].match(WS_PATH);
+    const session = match ? live(match[1]) : undefined;
+    if (!match || !session) {
+      socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    const role: Role = match[2] === "broadcast" ? "broadcaster" : "viewer";
+    wss.handleUpgrade(req, socket, head, (ws) => bridge(ws, session.relay, role));
+  });
+
+  setInterval(evictStaleRateHits, RL_WINDOW_MS).unref();
+
+  server.listen(port, host, () => {
+    console.log(`ttyl relay (node) listening on http://${host}:${port}`);
+  });
+}

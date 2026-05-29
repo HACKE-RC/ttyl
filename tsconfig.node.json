@@ -4,5 +4,5 @@
     "lib": ["ES2022"],
     "types": ["node", "ws"]
   },
-  "include": ["src/core", "src/node"]
+  "include": ["src/core", "src/node", "src/client", "src/cli.ts", "src/assets.d.ts"]
 }

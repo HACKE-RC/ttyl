@@ -1,2 +1,6 @@
-/ttyl
-*.out
+node_modules/
+.wrangler/
+dist/
+*.log
+.dev.vars
+.env
