@@ -226,10 +226,19 @@ export class Relay {
         case Kind.Auth:
           return; // a broadcaster does not send these once authed
       }
-    } else if (frame.kind === Kind.Input && conn.writer && this.broadcaster) {
-      // Only a viewer that proved the control key may type. View-only viewers
-      // are silently ignored, which is what makes a view-only link read-only.
-      this.broadcaster.send(data);
+    } else if (conn.writer && this.broadcaster) {
+      switch (frame.kind) {
+        case Kind.Input:
+        case Kind.Resize:
+          // Only a viewer that proved the control key may control the session.
+          // Resize is upstream too: the read-write browser can own the PTY
+          // geometry, then the broadcaster confirms it back to all viewers.
+          this.broadcaster.send(data);
+          return;
+        case Kind.Output:
+        case Kind.Auth:
+          return;
+      }
     }
   }
 

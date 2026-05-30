@@ -75,6 +75,21 @@ Start broadcasting the current terminal session:
 ttyl stream
 ```
 
+By default, the streamed PTY starts at `80x24` and a read-write browser can
+resize it to the browser viewport, so the web terminal uses the full tab instead
+of inheriting the broadcaster's local terminal size. To force a fixed canonical
+size instead:
+
+```bash
+ttyl stream --size 100x30
+```
+
+To make the broadcaster's local terminal window drive the stream size instead:
+
+```bash
+ttyl stream --follow-terminal-size
+```
+
 By default, this generates three URLs:
 - **Read-Write**: Grants viewers the ability to watch and type.
 - **View-Only**: Grants viewers watch-only access.

@@ -30,6 +30,7 @@ export const CSP =
 export function securityHeaders(contentType: string): Record<string, string> {
   return {
     "Content-Type": contentType,
+    "Cache-Control": "no-store",
     "Referrer-Policy": "no-referrer",
     "Content-Security-Policy": CSP,
     "X-Content-Type-Options": "nosniff",

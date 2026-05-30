@@ -23,6 +23,10 @@
     }
     #status {
       box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
       flex: 0 0 24px;
       height: 24px;
       padding: 4px 10px;
@@ -31,7 +35,13 @@
       border-top: 1px solid #1b2230;
       background: #11141c;
       color: #8f9bb3;
+    }
+    #status-main {
+      min-width: 0;
+      flex: 1 1 auto;
       white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     #status .dot {
       display: inline-block;
@@ -43,20 +53,58 @@
       vertical-align: middle;
     }
     #status.live .dot { background: #9ece6a; }
-    /* Holds the terminal grid and gives it the available tab area above the
-       status line. The grid keeps the broadcaster's exact dimensions (so
-       wrapping matches the source); the font is sized in JS to fit this box. */
+    #controls {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: 0 0 auto;
+    }
+    #controls button {
+      appearance: none;
+      border: 1px solid #283347;
+      border-radius: 4px;
+      background: #0b0e14;
+      color: #c8d3f5;
+      font: inherit;
+      line-height: 1;
+      min-width: 28px;
+      height: 20px;
+      padding: 0 6px;
+      cursor: pointer;
+    }
+    #controls button:active {
+      background: #151a24;
+    }
+    #controls button.active {
+      border-color: #9ece6a;
+      color: #9ece6a;
+    }
+    #scale-label {
+      min-width: 40px;
+      text-align: right;
+      color: #c8d3f5;
+      font-variant-numeric: tabular-nums;
+    }
+    /* The viewer scales the streamed terminal grid locally. */
     #fit {
       flex: 1 1 auto;
       min-height: 0;
-      overflow: hidden;
+      overflow: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+      padding: 10px;
+    }
+    #viewport {
+      position: relative;
+      min-width: 100%;
+      min-height: 100%;
     }
     #terminal {
-      /* Size to the grid's natural extent so the font fit can measure it. */
       width: max-content;
+      transform-origin: top left;
     }
     /* Hide xterm's reserved viewport scrollbar track for a clean edge; mouse
-       wheel scrollback still works. */
+      wheel scrollback still works. */
     .xterm-viewport {
       scrollbar-width: none;
     }
@@ -66,9 +114,17 @@
   </style>
 </head>
 <body>
-  <div id="fit"><div id="terminal"></div></div>
-  <div id="status"><span class="dot"></span><span id="status-text">connecting...</span></div>
+  <div id="fit"><div id="viewport"><div id="terminal"></div></div></div>
+  <div id="status">
+    <div id="status-main"><span class="dot"></span><span id="status-text">connecting...</span></div>
+    <div id="controls" aria-label="Viewer scale controls">
+      <button id="zoom-out" type="button" aria-label="Make terminal smaller">A-</button>
+      <button id="zoom-reset" type="button" aria-label="Fit terminal to browser">Fit</button>
+      <button id="zoom-in" type="button" aria-label="Make terminal larger">A+</button>
+      <span id="scale-label">100%</span>
+    </div>
+  </div>
   <script src="/static/xterm.js"></script>
-  <script src="/static/viewer.js?v=secure-fragment"></script>
+  <script src="/static/viewer.js?v=viewer-browser-fit-default-1"></script>
 </body>
 </html>

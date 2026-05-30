@@ -5,13 +5,23 @@ import { createRequire } from "node:module";
 import { WebSocket } from "ws";
 import { decode, encode, Kind } from "../core/wire";
 import { encodeAuthPayload } from "../core/auth";
-import { parseLifetime, printLinks, promptHidden, resolveServer } from "./util";
+import {
+  DEFAULT_STREAM_COLS,
+  DEFAULT_STREAM_ROWS,
+  parseLifetime,
+  parseTerminalSize,
+  printLinks,
+  promptHidden,
+  resolveServer,
+} from "./util";
 import { startControlServer } from "./control";
 
 export interface StreamArgs {
   server: string;
   viewOnly: boolean;
   lifetime: string;
+  size: string;
+  followTerminalSize: boolean;
   // password true means "prompt for a session password and protect viewers".
   password: boolean;
   command: string[];
@@ -21,10 +31,17 @@ export interface StreamArgs {
 // buffered bytes rather than growing memory without bound (viewers see a gap;
 // the live mirror is unaffected).
 const SEND_BUFFER_CAP = 16 * 1024 * 1024;
+const MIN_BROWSER_COLS = 20;
+const MIN_BROWSER_ROWS = 5;
+const MAX_BROWSER_COLS = 500;
+const MAX_BROWSER_ROWS = 200;
 
 export async function runStream(args: StreamArgs): Promise<void> {
   const ttl = parseLifetime(args.lifetime); // throws on bad input
   const server = await resolveServer(args.server);
+  if (args.followTerminalSize && args.size.trim() !== "") {
+    throw new Error("choose either --size or --follow-terminal-size, not both");
+  }
 
   // Prompt for the session password before anything else so it never lands in
   // shell history; it gates every viewer that joins.
@@ -50,8 +67,14 @@ export async function runStream(args: StreamArgs): Promise<void> {
 
   printLinks(server, id, key, admin, args.viewOnly);
 
-  const cols = process.stdout.columns || 80;
-  const rows = process.stdout.rows || 24;
+  const fixedSize = parseTerminalSize(args.size) ?? {
+    cols: DEFAULT_STREAM_COLS,
+    rows: DEFAULT_STREAM_ROWS,
+  };
+  const hasExplicitSize = args.size.trim() !== "";
+  const allowBrowserResize = !args.followTerminalSize && !hasExplicitSize;
+  let cols = args.followTerminalSize ? process.stdout.columns || fixedSize.cols : fixedSize.cols;
+  let rows = args.followTerminalSize ? process.stdout.rows || fixedSize.rows : fixedSize.rows;
   const command = args.command.length > 0 ? args.command : [process.env.SHELL || "/bin/sh"];
 
   // Publish the links on a local control socket so `ttyl links` can reprint them
@@ -84,8 +107,31 @@ export async function runStream(args: StreamArgs): Promise<void> {
     encoding: null,
   });
 
+  function publishResize(): void {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(encode({ kind: Kind.Resize, cols, rows }));
+    }
+  }
+
+  function resizePty(nextCols: number, nextRows: number): void {
+    if (!validBrowserResize(nextCols, nextRows)) {
+      return;
+    }
+    if (nextCols === cols && nextRows === rows) {
+      return;
+    }
+    cols = nextCols;
+    rows = nextRows;
+    try {
+      term.resize(cols, rows);
+    } catch {
+      // ignore transient resize errors
+    }
+    publishResize();
+  }
+
   // Broadcast the initial size before any output.
-  ws.send(encode({ kind: Kind.Resize, cols, rows }));
+  publishResize();
 
   let closed = false;
   const cleanup = (code: number): void => {
@@ -139,6 +185,8 @@ export async function runStream(args: StreamArgs): Promise<void> {
     }
     if (frame.kind === Kind.Input && frame.data) {
       term.write(Buffer.from(frame.data));
+    } else if (frame.kind === Kind.Resize && allowBrowserResize && frame.cols && frame.rows) {
+      resizePty(frame.cols, frame.rows);
     }
   });
   ws.addEventListener("close", () => cleanup(0));
@@ -157,19 +205,25 @@ export async function runStream(args: StreamArgs): Promise<void> {
   process.on("SIGTERM", () => cleanup(0));
   process.on("SIGHUP", () => cleanup(0));
 
-  // Local resize: match the PTY and tell viewers.
-  process.stdout.on("resize", () => {
-    const c = process.stdout.columns || cols;
-    const r = process.stdout.rows || rows;
-    try {
-      term.resize(c, r);
-    } catch {
-      // ignore transient resize errors
-    }
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(encode({ kind: Kind.Resize, cols: c, rows: r }));
-    }
-  });
+  // When explicitly enabled, the broadcaster's terminal window still drives the
+  // PTY geometry. By default the stream keeps its own fixed size so web viewers
+  // are not forced to inherit the broadcaster's local window dimensions.
+  if (args.followTerminalSize) {
+    process.stdout.on("resize", () => {
+      resizePty(process.stdout.columns || cols, process.stdout.rows || rows);
+    });
+  }
+}
+
+function validBrowserResize(cols: number, rows: number): boolean {
+  return (
+    Number.isInteger(cols) &&
+    Number.isInteger(rows) &&
+    cols >= MIN_BROWSER_COLS &&
+    rows >= MIN_BROWSER_ROWS &&
+    cols <= MAX_BROWSER_COLS &&
+    rows <= MAX_BROWSER_ROWS
+  );
 }
 
 function waitOpen(ws: WebSocket): Promise<void> {

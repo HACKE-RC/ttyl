@@ -309,7 +309,7 @@ describe("relay password gate", () => {
   });
 });
 
-describe("relay data plane unchanged", () => {
+describe("relay data plane", () => {
   it("fans out output to viewers and routes writer input to the broadcaster", () => {
     const { relay } = newRelay();
     const bc = new StubConn("broadcaster");
@@ -324,6 +324,26 @@ describe("relay data plane unchanged", () => {
     const input = encode({ kind: Kind.Input, data: new TextEncoder().encode("ls\n") });
     relay.message(v, input);
     expect(bc.sent.some((b) => decode(b).kind === Kind.Input)).toBe(true);
+  });
+
+  it("routes writer resize upstream and ignores view-only resize", () => {
+    const { relay } = newRelay();
+    const bc = new StubConn("broadcaster");
+    relay.message(bc, auth({ k: CONTROL }));
+    const writer = new StubConn("viewer");
+    relay.message(writer, auth({ k: CONTROL }));
+    const ro = new StubConn("viewer");
+    relay.message(ro, auth({}));
+
+    const resize = encode({ kind: Kind.Resize, cols: 120, rows: 40 });
+    relay.message(ro, resize);
+    expect(bc.sent.some((b) => decode(b).kind === Kind.Resize)).toBe(false);
+
+    relay.message(writer, resize);
+    expect(bc.sent.some((b) => {
+      const frame = decode(b);
+      return frame.kind === Kind.Resize && frame.cols === 120 && frame.rows === 40;
+    })).toBe(true);
   });
 
   it("ends the session when the broadcaster leaves", () => {

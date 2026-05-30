@@ -15,7 +15,7 @@ Commands:
   serve    Run a relay server (Node)
 
 Flags:
-  stream [--server <url>] [--view-only] [--password] [--lifetime <30m|8h|2d|never>] [-- command...]
+  stream [--server <url>] [--view-only] [--password] [--lifetime <30m|8h|2d|never>] [--size <80x24>] [--follow-terminal-size] [-- command...]
   stop   [<session-id>]
   admin  [<dashboard-link>] [--server <url>] [--id <id>] [--key <admin-key>]
   init   [--server <url>]
@@ -34,6 +34,8 @@ async function main(): Promise<void> {
         viewOnly: flagBool(flags, "-view-only", "--view-only"),
         password: flagBool(flags, "-password", "--password"),
         lifetime: flagValue(flags, "-lifetime", "--lifetime") ?? "",
+        size: flagValue(flags, "-size", "--size") ?? "",
+        followTerminalSize: flagBool(flags, "-follow-terminal-size", "--follow-terminal-size"),
         command,
       });
       return;

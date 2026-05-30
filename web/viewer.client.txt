@@ -9,11 +9,41 @@ const KIND_OUTPUT = 0;
 const KIND_INPUT = 1;
 const KIND_RESIZE = 2;
 const KIND_AUTH = 3;
+const CONTROL_KEY_STORAGE_PREFIX = "ttyl.viewer.controlKey.";
 
 const statusEl = document.getElementById("status");
 const statusText = document.getElementById("status-text");
+const zoomOutEl = document.getElementById("zoom-out");
+const zoomInEl = document.getElementById("zoom-in");
+const zoomResetEl = document.getElementById("zoom-reset");
+const scaleLabelEl = document.getElementById("scale-label");
+const fitEl = document.getElementById("fit");
+const viewportEl = document.getElementById("viewport");
+const termEl = document.getElementById("terminal");
 const TERMINAL_FONT =
   '"JetBrains Mono", "Symbols Nerd Font Mono", "JetBrainsMono Nerd Font", "JetBrainsMonoNL Nerd Font", "Symbols Nerd Font", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+const BASE_FONT_SIZE = 15;
+const DEFAULT_SCALE = 1;
+const MIN_SCALE = 0.1;
+const MAX_SCALE = 4;
+const SCALE_STEP = 0.1;
+const MIN_VIEWER_COLS = 20;
+const MIN_VIEWER_ROWS = 5;
+const MAX_VIEWER_COLS = 500;
+const MAX_VIEWER_ROWS = 200;
+const MODE_MANUAL = "manual";
+const MODE_FIT_WIDTH = "fit-width";
+let viewerScale = DEFAULT_SCALE;
+let scaleMode = MODE_FIT_WIDTH;
+let currentScale = viewerScale;
+let sourceCols = 0;
+let sourceRows = 0;
+let layoutFrame = 0;
+let browserResizeFrame = 0;
+let lastSentResizeKey = "";
+let canType = false;
+let socket;
+let stopped = false;
 
 function setStatus(text, live) {
   statusText.textContent = text;
@@ -23,42 +53,27 @@ function setStatus(text, live) {
 const term = new Terminal({
   cursorBlink: true,
   fontFamily: TERMINAL_FONT,
-  fontSize: 14,
+  fontSize: BASE_FONT_SIZE,
   theme: { background: "#0b0e14", foreground: "#c8d3f5" },
 });
-const fitEl = document.getElementById("fit");
-const termEl = document.getElementById("terminal");
 term.open(termEl);
+term.focus();
 if (document.fonts) {
   document.fonts.ready.then(() => {
     term.options.fontFamily = TERMINAL_FONT;
     term.refresh(0, term.rows - 1);
-    fitFontToTab();
+    scheduleViewportChange();
   });
 }
-
-// The viewer keeps the broadcaster's exact grid (so wrapping matches the
-// source) and sizes the font so the whole grid fits inside the terminal pane.
-// Fitting against both width and height guarantees nothing overflows or hides
-// behind the bottom status line. The grid sits at the top-left like a normal
-// terminal window.
-const MIN_FONT = 4;
-
-function fitFontToTab() {
-  const gridW = termEl.offsetWidth;
-  const gridH = termEl.offsetHeight;
-  if (!gridW || !gridH) return;
-  const current = term.options.fontSize;
-  const factor = Math.min(fitEl.clientWidth / gridW, fitEl.clientHeight / gridH);
-  const next = Math.max(MIN_FONT, current * factor);
-  if (Math.abs(next - current) > 0.1) {
-    term.options.fontSize = next;
-  }
-}
-
-window.addEventListener("resize", fitFontToTab);
+wireZoomControls();
+term.onResize(scheduleViewportChange);
+term.onRender(scheduleLayout);
+window.addEventListener("resize", scheduleViewportChange);
 if (window.visualViewport) {
-  window.visualViewport.addEventListener("resize", fitFontToTab);
+  window.visualViewport.addEventListener("resize", scheduleViewportChange);
+}
+if (window.ResizeObserver) {
+  new ResizeObserver(scheduleViewportChange).observe(fitEl);
 }
 
 // The page is always /s/{id}. The read-write control key, if any, arrives in
@@ -68,13 +83,12 @@ if (window.visualViewport) {
 // the visible URL or this navigation's history entry.
 const pathParts = location.pathname.split("/").filter(Boolean);
 const sessionId = pathParts[1];
-const controlKey = location.hash ? decodeURIComponent(location.hash.replace(/^#/, "")) : "";
-const canType = controlKey.length > 0;
-if (controlKey) {
-  history.replaceState(null, "", location.pathname + location.search);
-}
+const controlKey = loadControlKey();
+canType = controlKey.length > 0;
 
-// The broadcaster owns the terminal size; the viewer only mirrors it.
+// The source PTY has one canonical grid. A read-write browser is allowed to
+// drive that grid from its viewport, like a normal web terminal; view-only
+// browsers only mirror the grid the broadcaster confirms.
 const encoder = new TextEncoder();
 function sendInput(data) {
   const bytes = encoder.encode(data);
@@ -100,8 +114,10 @@ function handleFrame(buffer) {
     const cols = view.getUint16(1, false);
     const rows = view.getUint16(3, false);
     if (cols > 0 && rows > 0) {
+      sourceCols = cols;
+      sourceRows = rows;
       term.resize(cols, rows);
-      requestAnimationFrame(fitFontToTab);
+      scheduleViewportChange();
     }
   }
 }
@@ -183,8 +199,170 @@ function askPassword(message) {
   });
 }
 
-let socket;
-let stopped = false;
+function loadControlKey() {
+  const fragmentKey = location.hash ? decodeURIComponent(location.hash.replace(/^#/, "")) : "";
+  const storageKey = `${CONTROL_KEY_STORAGE_PREFIX}${sessionId}`;
+  if (fragmentKey) {
+    try {
+      window.sessionStorage.setItem(storageKey, fragmentKey);
+    } catch {
+      // Keep the key in memory if tab-scoped storage is unavailable.
+    }
+    history.replaceState(null, "", location.pathname + location.search);
+    return fragmentKey;
+  }
+  if (!isReloadNavigation()) {
+    return "";
+  }
+  try {
+    return window.sessionStorage.getItem(storageKey) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function isReloadNavigation() {
+  const nav = performance.getEntriesByType?.("navigation")?.[0];
+  return nav && "type" in nav ? nav.type === "reload" : performance.navigation?.type === 1;
+}
+
+function clampScale(value) {
+  const rounded = Math.round(value * 100) / 100;
+  return Math.max(MIN_SCALE, Math.min(MAX_SCALE, rounded));
+}
+
+function setViewerScale(next) {
+  const clamped = clampScale(next);
+  if (clamped === viewerScale && scaleMode === MODE_MANUAL) return;
+  viewerScale = clamped;
+  scaleMode = MODE_MANUAL;
+  scheduleLayout();
+}
+
+function setScaleMode(next) {
+  if (scaleMode === next) return;
+  scaleMode = next;
+  scheduleLayout();
+}
+
+function scheduleViewportChange() {
+  scheduleLayout();
+  scheduleBrowserResize();
+}
+
+function scheduleLayout() {
+  if (layoutFrame) return;
+  layoutFrame = requestAnimationFrame(() => {
+    layoutFrame = 0;
+    applyLayout();
+  });
+}
+
+function applyLayout() {
+  const { width: naturalWidth, height: naturalHeight } = terminalNaturalSize();
+  if (!naturalWidth || !naturalHeight) return;
+  const box = viewerBox();
+  const nextScale =
+    scaleMode === MODE_FIT_WIDTH
+      ? clampScale(Math.min(box.width / naturalWidth, box.height / naturalHeight))
+      : viewerScale;
+  termEl.style.transform = `scale(${nextScale})`;
+  viewportEl.style.width = `${Math.max(box.width, Math.ceil(naturalWidth * nextScale))}px`;
+  viewportEl.style.height = `${Math.max(box.height, Math.ceil(naturalHeight * nextScale))}px`;
+  currentScale = nextScale;
+  updateScaleLabel();
+}
+
+function scheduleBrowserResize() {
+  if (!canType || browserResizeFrame) return;
+  browserResizeFrame = requestAnimationFrame(() => {
+    browserResizeFrame = 0;
+    sendBrowserResize();
+  });
+}
+
+function sendBrowserResize() {
+  if (!canType || !socket || socket.readyState !== WebSocket.OPEN) return;
+  const grid = desiredBrowserGrid();
+  if (!grid) return;
+  const key = `${grid.cols}x${grid.rows}`;
+  if (key === lastSentResizeKey || (grid.cols === sourceCols && grid.rows === sourceRows)) {
+    return;
+  }
+  const frame = new Uint8Array(5);
+  const view = new DataView(frame.buffer);
+  frame[0] = KIND_RESIZE;
+  view.setUint16(1, grid.cols, false);
+  view.setUint16(3, grid.rows, false);
+  socket.send(frame);
+  lastSentResizeKey = key;
+}
+
+function desiredBrowserGrid() {
+  const { width: naturalWidth, height: naturalHeight } = terminalNaturalSize();
+  const cols = term.cols || sourceCols;
+  const rows = term.rows || sourceRows;
+  if (!naturalWidth || !naturalHeight || !cols || !rows) return null;
+  const cellWidth = naturalWidth / cols;
+  const cellHeight = naturalHeight / rows;
+  if (!Number.isFinite(cellWidth) || !Number.isFinite(cellHeight) || cellWidth <= 0 || cellHeight <= 0) {
+    return null;
+  }
+  const box = viewerBox();
+  return {
+    cols: clampInt(Math.floor(box.width / cellWidth), MIN_VIEWER_COLS, MAX_VIEWER_COLS),
+    rows: clampInt(Math.floor(box.height / cellHeight), MIN_VIEWER_ROWS, MAX_VIEWER_ROWS),
+  };
+}
+
+function terminalNaturalSize() {
+  const screen = termEl.querySelector(".xterm-screen");
+  const el = screen || termEl;
+  const rect = el.getBoundingClientRect();
+  return {
+    width: el.scrollWidth || rect.width,
+    height: el.scrollHeight || rect.height,
+  };
+}
+
+function clampInt(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function wireZoomControls() {
+  scheduleLayout();
+  zoomOutEl.addEventListener("click", () => setViewerScale(currentScale - SCALE_STEP));
+  zoomInEl.addEventListener("click", () => setViewerScale(currentScale + SCALE_STEP));
+  zoomResetEl.addEventListener("click", () => setScaleMode(MODE_FIT_WIDTH));
+  scaleLabelEl.addEventListener("click", () => setViewerScale(DEFAULT_SCALE));
+  termEl.addEventListener("click", () => term.focus());
+  fitEl.addEventListener(
+    "wheel",
+    (event) => {
+      if (!event.ctrlKey) return;
+      event.preventDefault();
+      setViewerScale(currentScale + (event.deltaY < 0 ? SCALE_STEP : -SCALE_STEP));
+    },
+    { passive: false },
+  );
+}
+
+function viewerBox() {
+  const style = getComputedStyle(fitEl);
+  const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+  const paddingY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+  return {
+    width: Math.max(0, fitEl.clientWidth - paddingX),
+    height: Math.max(0, fitEl.clientHeight - paddingY),
+  };
+}
+
+function updateScaleLabel() {
+  const percent = Math.round(currentScale * 100);
+  const grid = sourceCols && sourceRows ? ` ${sourceCols}x${sourceRows}` : "";
+  scaleLabelEl.textContent = scaleMode === MODE_FIT_WIDTH ? `fit ${percent}%${grid}` : `${percent}%${grid}`;
+  zoomResetEl.classList.toggle("active", scaleMode === MODE_FIT_WIDTH);
+}
 
 function connect() {
   if (stopped) return;
@@ -193,8 +371,10 @@ function connect() {
   socket.binaryType = "arraybuffer";
 
   socket.onopen = () => {
+    lastSentResizeKey = "";
     sendAuth();
     setStatus(liveLabel, true);
+    scheduleBrowserResize();
   };
   socket.onmessage = (event) => handleFrame(event.data);
   socket.onclose = (event) => handleClose(event.code);

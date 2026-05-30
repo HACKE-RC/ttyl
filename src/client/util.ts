@@ -3,6 +3,8 @@
 import { load } from "./config";
 
 export const DEFAULT_SERVER = "http://localhost:8080";
+export const DEFAULT_STREAM_COLS = 80;
+export const DEFAULT_STREAM_ROWS = 24;
 
 const UNIT_SECONDS: Record<string, number> = {
   s: 1,
@@ -10,6 +12,11 @@ const UNIT_SECONDS: Record<string, number> = {
   h: 60 * 60,
   d: 24 * 60 * 60,
 };
+
+export interface TerminalSize {
+  cols: number;
+  rows: number;
+}
 
 // parseLifetime turns a --lifetime value into a ttl for the relay:
 //   ""            -> undefined (omit ?ttl; the relay uses its default)
@@ -36,6 +43,31 @@ export function parseLifetime(input: string): number | undefined {
     throw new Error(`invalid --lifetime "${input}": use values like 30m, 8h, 2d, or 'never'`);
   }
   return total;
+}
+
+// parseTerminalSize turns a --size value into a PTY geometry:
+//   ""          -> undefined (caller uses the default)
+//   80x24       -> { cols: 80, rows: 24 }
+//   100X30      -> { cols: 100, rows: 30 }
+// It throws on malformed or implausible values.
+export function parseTerminalSize(input: string): TerminalSize | undefined {
+  const s = input.trim().toLowerCase();
+  if (s === "") {
+    return undefined;
+  }
+  const match = /^(\d+)x(\d+)$/.exec(s);
+  if (!match) {
+    throw new Error(`invalid --size "${input}": use COLSxROWS, for example 80x24`);
+  }
+  const cols = Number(match[1]);
+  const rows = Number(match[2]);
+  if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 20 || rows < 5) {
+    throw new Error(`invalid --size "${input}": minimum size is 20x5`);
+  }
+  if (cols > 500 || rows > 200) {
+    throw new Error(`invalid --size "${input}": maximum size is 500x200`);
+  }
+  return { cols, rows };
 }
 
 // validateServerURL asserts an http(s) URL with a host and returns it trimmed
