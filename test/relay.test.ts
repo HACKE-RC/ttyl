@@ -326,7 +326,7 @@ describe("relay data plane", () => {
     expect(bc.sent.some((b) => decode(b).kind === Kind.Input)).toBe(true);
   });
 
-  it("routes writer resize upstream and ignores view-only resize", () => {
+  it("never routes viewer resize upstream", () => {
     const { relay } = newRelay();
     const bc = new StubConn("broadcaster");
     relay.message(bc, auth({ k: CONTROL }));
@@ -340,10 +340,7 @@ describe("relay data plane", () => {
     expect(bc.sent.some((b) => decode(b).kind === Kind.Resize)).toBe(false);
 
     relay.message(writer, resize);
-    expect(bc.sent.some((b) => {
-      const frame = decode(b);
-      return frame.kind === Kind.Resize && frame.cols === 120 && frame.rows === 40;
-    })).toBe(true);
+    expect(bc.sent.some((b) => decode(b).kind === Kind.Resize)).toBe(false);
   });
 
   it("ends the session when the broadcaster leaves", () => {

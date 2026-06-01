@@ -75,20 +75,27 @@ Start broadcasting the current terminal session:
 ttyl stream
 ```
 
-By default, the streamed PTY starts at `80x24` and a read-write browser can
-resize it to the browser viewport, so the web terminal uses the full tab instead
-of inheriting the broadcaster's local terminal size. To force a fixed canonical
-size instead:
+There is one canonical PTY grid for the running command. By default the
+broadcaster's own terminal window owns that grid (it tracks your window as you
+resize it), so your local terminal never has dead space. Browser viewers do not
+resize that PTY. Instead, the browser renders the exact source grid in its own
+viewport. The default browser mode keeps cells readable and lets you pan if rows
+or columns are clipped, while keeping the full terminal height visible when
+possible so bottom prompts/status bars do not disappear. Fit shows the whole
+source grid when you need context.
+This keeps full-screen TUIs correct because their cursor positions and wrap
+decisions are interpreted at the same dimensions the source PTY used.
+
+To pin a fixed canonical size for everyone instead (no window tracking):
 
 ```bash
 ttyl stream --size 100x30
 ```
 
-To make the broadcaster's local terminal window drive the stream size instead:
-
-```bash
-ttyl stream --follow-terminal-size
-```
+`--follow-terminal-size` makes the window-tracking explicit; it is the default
+whenever you stream from a real terminal. When there is no local terminal
+(headless or piped output), the explicit `--size` value or the default `80x24`
+grid is used; browser viewport size still never feeds back into the PTY.
 
 By default, this generates three URLs:
 - **Read-Write**: Grants viewers the ability to watch and type.

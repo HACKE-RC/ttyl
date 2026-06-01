@@ -31,10 +31,10 @@ export interface StreamArgs {
 // buffered bytes rather than growing memory without bound (viewers see a gap;
 // the live mirror is unaffected).
 const SEND_BUFFER_CAP = 16 * 1024 * 1024;
-const MIN_BROWSER_COLS = 20;
-const MIN_BROWSER_ROWS = 5;
-const MAX_BROWSER_COLS = 500;
-const MAX_BROWSER_ROWS = 200;
+const MIN_STREAM_COLS = 20;
+const MIN_STREAM_ROWS = 5;
+const MAX_STREAM_COLS = 500;
+const MAX_STREAM_ROWS = 200;
 
 export async function runStream(args: StreamArgs): Promise<void> {
   const ttl = parseLifetime(args.lifetime); // throws on bad input
@@ -72,9 +72,13 @@ export async function runStream(args: StreamArgs): Promise<void> {
     rows: DEFAULT_STREAM_ROWS,
   };
   const hasExplicitSize = args.size.trim() !== "";
-  const allowBrowserResize = !args.followTerminalSize && !hasExplicitSize;
-  let cols = args.followTerminalSize ? process.stdout.columns || fixedSize.cols : fixedSize.cols;
-  let rows = args.followTerminalSize ? process.stdout.rows || fixedSize.rows : fixedSize.rows;
+  // There is one canonical PTY grid. If the broadcaster has a terminal window,
+  // it owns that grid and tracks its local size. Otherwise the stream uses the
+  // explicit/default size. Browser geometry is handled only in the browser view
+  // layer, so a web viewport can never change the PTY's wrap/cursor semantics.
+  const followWindow = !hasExplicitSize && (args.followTerminalSize || process.stdout.isTTY === true);
+  let cols = followWindow ? process.stdout.columns || fixedSize.cols : fixedSize.cols;
+  let rows = followWindow ? process.stdout.rows || fixedSize.rows : fixedSize.rows;
   const command = args.command.length > 0 ? args.command : [process.env.SHELL || "/bin/sh"];
 
   // Publish the links on a local control socket so `ttyl links` can reprint them
@@ -114,7 +118,7 @@ export async function runStream(args: StreamArgs): Promise<void> {
   }
 
   function resizePty(nextCols: number, nextRows: number): void {
-    if (!validBrowserResize(nextCols, nextRows)) {
+    if (!validResize(nextCols, nextRows)) {
       return;
     }
     if (nextCols === cols && nextRows === rows) {
@@ -185,8 +189,6 @@ export async function runStream(args: StreamArgs): Promise<void> {
     }
     if (frame.kind === Kind.Input && frame.data) {
       term.write(Buffer.from(frame.data));
-    } else if (frame.kind === Kind.Resize && allowBrowserResize && frame.cols && frame.rows) {
-      resizePty(frame.cols, frame.rows);
     }
   });
   ws.addEventListener("close", () => cleanup(0));
@@ -205,24 +207,25 @@ export async function runStream(args: StreamArgs): Promise<void> {
   process.on("SIGTERM", () => cleanup(0));
   process.on("SIGHUP", () => cleanup(0));
 
-  // When explicitly enabled, the broadcaster's terminal window still drives the
-  // PTY geometry. By default the stream keeps its own fixed size so web viewers
-  // are not forced to inherit the broadcaster's local window dimensions.
-  if (args.followTerminalSize) {
+  // When the broadcaster owns the grid, keep the PTY tracking the local window
+  // so the terminal it is mirrored into never shows dead space. Each confirmed
+  // size is published to viewers, which render the same source grid and scale
+  // it visually without feeding browser geometry back into this PTY.
+  if (followWindow) {
     process.stdout.on("resize", () => {
       resizePty(process.stdout.columns || cols, process.stdout.rows || rows);
     });
   }
 }
 
-function validBrowserResize(cols: number, rows: number): boolean {
+function validResize(cols: number, rows: number): boolean {
   return (
     Number.isInteger(cols) &&
     Number.isInteger(rows) &&
-    cols >= MIN_BROWSER_COLS &&
-    rows >= MIN_BROWSER_ROWS &&
-    cols <= MAX_BROWSER_COLS &&
-    rows <= MAX_BROWSER_ROWS
+    cols >= MIN_STREAM_COLS &&
+    rows >= MIN_STREAM_ROWS &&
+    cols <= MAX_STREAM_COLS &&
+    rows <= MAX_STREAM_ROWS
   );
 }
 

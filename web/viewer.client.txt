@@ -1,10 +1,8 @@
-// ttyl web viewer: renders a live PTY stream and forwards keystrokes.
+// ttyl web viewer: renders the source PTY grid and scales it visually.
 //
-// The wire protocol mirrors internal/wire: each WebSocket binary message is a
-// single frame whose first byte is the kind, followed by the payload.
-//   0 = Output  (PTY bytes to render)
-//   1 = Input   (keystroke bytes to send)
-//   2 = Resize  (uint16 cols, uint16 rows, big-endian)
+// Terminal control sequences are interpreted only at the source PTY size. The
+// browser must not replay them into a different grid because TUIs use absolute
+// cursor positions and wrap decisions based on the source terminal width.
 const KIND_OUTPUT = 0;
 const KIND_INPUT = 1;
 const KIND_RESIZE = 2;
@@ -13,37 +11,38 @@ const CONTROL_KEY_STORAGE_PREFIX = "ttyl.viewer.controlKey.";
 
 const statusEl = document.getElementById("status");
 const statusText = document.getElementById("status-text");
-const zoomOutEl = document.getElementById("zoom-out");
-const zoomInEl = document.getElementById("zoom-in");
-const zoomResetEl = document.getElementById("zoom-reset");
-const scaleLabelEl = document.getElementById("scale-label");
 const fitEl = document.getElementById("fit");
 const viewportEl = document.getElementById("viewport");
+const stageEl = document.getElementById("stage");
 const termEl = document.getElementById("terminal");
+const zoomOutEl = document.getElementById("zoom-out");
+const zoomInEl = document.getElementById("zoom-in");
+const modeFitEl = document.getElementById("mode-fit");
+const modeReadableEl = document.getElementById("mode-readable");
+const modeActualEl = document.getElementById("mode-actual");
+const scaleLabelEl = document.getElementById("scale-label");
 const TERMINAL_FONT =
   '"JetBrains Mono", "Symbols Nerd Font Mono", "JetBrainsMono Nerd Font", "JetBrainsMonoNL Nerd Font", "Symbols Nerd Font", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
 const BASE_FONT_SIZE = 15;
-const DEFAULT_SCALE = 1;
-const MIN_SCALE = 0.1;
-const MAX_SCALE = 4;
-const SCALE_STEP = 0.1;
-const MIN_VIEWER_COLS = 20;
-const MIN_VIEWER_ROWS = 5;
-const MAX_VIEWER_COLS = 500;
-const MAX_VIEWER_ROWS = 200;
-const MODE_MANUAL = "manual";
-const MODE_FIT_WIDTH = "fit-width";
-let viewerScale = DEFAULT_SCALE;
-let scaleMode = MODE_FIT_WIDTH;
-let currentScale = viewerScale;
-let sourceCols = 0;
-let sourceRows = 0;
-let layoutFrame = 0;
-let browserResizeFrame = 0;
-let lastSentResizeKey = "";
+const MODE_FIT = "fit";
+const MODE_READABLE = "readable";
+const MODE_ACTUAL = "actual";
+const MIN_READABLE_CELL_WIDTH = 7;
+const MIN_READABLE_CELL_HEIGHT = 12;
+const ZOOM_STEP = 1.15;
+const MIN_USER_ZOOM = 0.25;
+const MAX_USER_ZOOM = 5;
+
 let canType = false;
 let socket;
 let stopped = false;
+let layoutFrame = 0;
+let userZoom = 1;
+let scaleMode = MODE_READABLE;
+let xOffset = 0;
+let yOffset = 0;
+let lastLayout = null;
+let pointerDrag = null;
 
 function setStatus(text, live) {
   statusText.textContent = text;
@@ -62,33 +61,34 @@ if (document.fonts) {
   document.fonts.ready.then(() => {
     term.options.fontFamily = TERMINAL_FONT;
     term.refresh(0, term.rows - 1);
-    scheduleViewportChange();
+    scheduleLayout();
   });
 }
-wireZoomControls();
-term.onResize(scheduleViewportChange);
+term.onResize(scheduleLayout);
 term.onRender(scheduleLayout);
-window.addEventListener("resize", scheduleViewportChange);
+window.addEventListener("resize", scheduleLayout);
 if (window.visualViewport) {
-  window.visualViewport.addEventListener("resize", scheduleViewportChange);
+  window.visualViewport.addEventListener("resize", scheduleLayout);
 }
 if (window.ResizeObserver) {
-  new ResizeObserver(scheduleViewportChange).observe(fitEl);
+  new ResizeObserver(scheduleLayout).observe(fitEl);
 }
+viewportEl.addEventListener("wheel", handleWheel, { passive: false });
+viewportEl.addEventListener("pointerdown", handlePointerDown);
+viewportEl.addEventListener("pointermove", handlePointerMove);
+viewportEl.addEventListener("pointerup", handlePointerUp);
+viewportEl.addEventListener("pointercancel", handlePointerUp);
+zoomOutEl.addEventListener("click", () => setZoom(userZoom / ZOOM_STEP));
+zoomInEl.addEventListener("click", () => setZoom(userZoom * ZOOM_STEP));
+modeFitEl.addEventListener("click", () => setScaleMode(MODE_FIT));
+modeReadableEl.addEventListener("click", () => setScaleMode(MODE_READABLE));
+modeActualEl.addEventListener("click", () => setScaleMode(MODE_ACTUAL));
 
-// The page is always /s/{id}. The read-write control key, if any, arrives in
-// the URL fragment (#{key}), which the browser never sends to the server. A
-// present key authorizes typing; without it this viewer is view-only. The key
-// is read once and then stripped from the address bar so it does not linger in
-// the visible URL or this navigation's history entry.
 const pathParts = location.pathname.split("/").filter(Boolean);
 const sessionId = pathParts[1];
 const controlKey = loadControlKey();
 canType = controlKey.length > 0;
 
-// The source PTY has one canonical grid. A read-write browser is allowed to
-// drive that grid from its viewport, like a normal web terminal; view-only
-// browsers only mirror the grid the broadcaster confirms.
 const encoder = new TextEncoder();
 function sendInput(data) {
   const bytes = encoder.encode(data);
@@ -114,34 +114,177 @@ function handleFrame(buffer) {
     const cols = view.getUint16(1, false);
     const rows = view.getUint16(3, false);
     if (cols > 0 && rows > 0) {
-      sourceCols = cols;
-      sourceRows = rows;
       term.resize(cols, rows);
-      scheduleViewportChange();
+      scheduleLayout();
     }
   }
+}
+
+function scheduleLayout() {
+  if (layoutFrame) return;
+  layoutFrame = requestAnimationFrame(() => {
+    layoutFrame = 0;
+    applyLayout();
+  });
+}
+
+function applyLayout() {
+  const natural = terminalNaturalSize();
+  if (!natural.width || !natural.height) return;
+  const box = viewerBox();
+  if (!box.width || !box.height) return;
+  const scales = scaleChoices(natural, box);
+  const baseScale = scales[scaleMode] ?? scales[MODE_READABLE];
+  const scale = Math.max(scales[MODE_FIT], baseScale * userZoom);
+  const maxX = Math.max(0, natural.width * scale - box.width);
+  const maxY = Math.max(0, natural.height * scale - box.height);
+  xOffset = clamp(xOffset, 0, maxX);
+  yOffset = clamp(yOffset, 0, maxY);
+  viewportEl.style.width = `${box.width}px`;
+  viewportEl.style.height = `${box.height}px`;
+  stageEl.style.width = `${natural.width}px`;
+  stageEl.style.height = `${natural.height}px`;
+  stageEl.style.left = `${-xOffset}px`;
+  stageEl.style.top = `${-yOffset}px`;
+  stageEl.style.transform = `scale(${scale})`;
+  lastLayout = { natural, box, baseScale, scale, maxX, maxY, coverScale: scales[MODE_FIT] };
+  updateControls(scale);
+}
+
+function scaleChoices(natural, box) {
+  const widthFit = box.width / natural.width;
+  const heightFit = box.height / natural.height;
+  const containScale = Math.min(widthFit, heightFit);
+  const cols = term.cols || 1;
+  const rows = term.rows || 1;
+  const cellWidth = natural.width / cols;
+  const cellHeight = natural.height / rows;
+  const readableTarget = Math.max(
+    MIN_READABLE_CELL_WIDTH / cellWidth,
+    MIN_READABLE_CELL_HEIGHT / cellHeight,
+  );
+  // Default to a legible view only when it can still show the whole vertical
+  // grid. Full-screen TUIs keep prompts/status bars at the bottom; hiding them
+  // by default is worse than needing horizontal pan.
+  const readableScale = clamp(readableTarget, containScale, heightFit);
+  return {
+    [MODE_FIT]: containScale,
+    [MODE_READABLE]: readableScale,
+    [MODE_ACTUAL]: Math.max(containScale, 1),
+  };
+}
+
+function handleWheel(event) {
+  if (!lastLayout) scheduleLayout();
+  const layout = lastLayout;
+  if (!layout) return;
+
+  if (event.ctrlKey || event.metaKey) {
+    event.preventDefault();
+    const rect = viewportEl.getBoundingClientRect();
+    const px = event.clientX - rect.left;
+    const py = event.clientY - rect.top;
+    const beforeX = (xOffset + px) / layout.scale;
+    const beforeY = (yOffset + py) / layout.scale;
+    const factor = Math.exp(-event.deltaY * 0.0015);
+    userZoom = clamp(userZoom * factor, MIN_USER_ZOOM, MAX_USER_ZOOM);
+    const nextScale = layout.baseScale * userZoom;
+    xOffset = beforeX * nextScale - px;
+    yOffset = beforeY * nextScale - py;
+    applyLayout();
+    return;
+  }
+
+  if (layout.maxX > 0 || layout.maxY > 0) {
+    event.preventDefault();
+    xOffset += event.shiftKey && Math.abs(event.deltaY) > Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+    yOffset += event.deltaY;
+    applyLayout();
+  }
+}
+
+function setZoom(nextZoom) {
+  userZoom = clamp(nextZoom, MIN_USER_ZOOM, MAX_USER_ZOOM);
+  applyLayout();
+}
+
+function setScaleMode(nextMode) {
+  scaleMode = nextMode;
+  userZoom = 1;
+  xOffset = 0;
+  yOffset = 0;
+  applyLayout();
+}
+
+function updateControls(scale) {
+  scaleLabelEl.textContent = `${Math.round(scale * 100)}%`;
+  modeFitEl.classList.toggle("active", scaleMode === MODE_FIT);
+  modeReadableEl.classList.toggle("active", scaleMode === MODE_READABLE);
+  modeActualEl.classList.toggle("active", scaleMode === MODE_ACTUAL);
+}
+
+function handlePointerDown(event) {
+  if (!lastLayout || (lastLayout.maxX === 0 && lastLayout.maxY === 0)) return;
+  pointerDrag = { id: event.pointerId, x: event.clientX, y: event.clientY };
+  viewportEl.setPointerCapture(event.pointerId);
+}
+
+function handlePointerMove(event) {
+  if (!pointerDrag || pointerDrag.id !== event.pointerId) return;
+  event.preventDefault();
+  xOffset -= event.clientX - pointerDrag.x;
+  yOffset -= event.clientY - pointerDrag.y;
+  pointerDrag.x = event.clientX;
+  pointerDrag.y = event.clientY;
+  applyLayout();
+}
+
+function handlePointerUp(event) {
+  if (!pointerDrag || pointerDrag.id !== event.pointerId) return;
+  pointerDrag = null;
+  try {
+    viewportEl.releasePointerCapture(event.pointerId);
+  } catch {
+    // ignore stale pointer captures
+  }
+}
+
+function terminalNaturalSize() {
+  const screen = termEl.querySelector(".xterm-screen");
+  const el = screen || termEl;
+  const rect = el.getBoundingClientRect();
+  return {
+    width: el.scrollWidth || rect.width,
+    height: el.scrollHeight || rect.height,
+  };
+}
+
+function viewerBox() {
+  const style = getComputedStyle(fitEl);
+  const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+  const paddingY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+  return {
+    width: Math.max(0, fitEl.clientWidth - paddingX),
+    height: Math.max(0, fitEl.clientHeight - paddingY),
+  };
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
 const wsScheme = location.protocol === "https:" ? "wss" : "ws";
 const wsURL = `${wsScheme}://${location.host}/ws/${sessionId}/view`;
 const liveLabel = canType ? "live" : "live (view-only)";
 
-// Application close codes the relay uses to explain a rejected/ended viewer.
-// Keep these in sync with the CLOSE_* constants in src/core/relay.ts.
 const CLOSE_KICKED = 4001;
 const CLOSE_LOCKED = 4002;
 const CLOSE_PASSWORD_REQUIRED = 4003;
 const CLOSE_PASSWORD_INCORRECT = 4004;
 const CLOSE_TOO_MANY_ATTEMPTS = 4005;
 
-// The session password, supplied by the viewer when the relay asks for it. It
-// is held only in memory for this page and sent in the Auth frame, never put in
-// the URL.
 let password = "";
 
-// The control key and password never go in the URL; they are proven with an
-// Auth frame (JSON { k?, p? }) sent as the first message after the socket opens.
-// An empty object means a view-only viewer with no password.
 function sendAuth() {
   const payload = {};
   if (controlKey) payload.k = controlKey;
@@ -153,8 +296,6 @@ function sendAuth() {
   socket.send(frame);
 }
 
-// A minimal password prompt overlay, built in JS so the page ships no extra
-// markup when no password is set. The promise resolves with the entered value.
 function askPassword(message) {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
@@ -226,144 +367,6 @@ function isReloadNavigation() {
   return nav && "type" in nav ? nav.type === "reload" : performance.navigation?.type === 1;
 }
 
-function clampScale(value) {
-  const rounded = Math.round(value * 100) / 100;
-  return Math.max(MIN_SCALE, Math.min(MAX_SCALE, rounded));
-}
-
-function setViewerScale(next) {
-  const clamped = clampScale(next);
-  if (clamped === viewerScale && scaleMode === MODE_MANUAL) return;
-  viewerScale = clamped;
-  scaleMode = MODE_MANUAL;
-  scheduleLayout();
-}
-
-function setScaleMode(next) {
-  if (scaleMode === next) return;
-  scaleMode = next;
-  scheduleLayout();
-}
-
-function scheduleViewportChange() {
-  scheduleLayout();
-  scheduleBrowserResize();
-}
-
-function scheduleLayout() {
-  if (layoutFrame) return;
-  layoutFrame = requestAnimationFrame(() => {
-    layoutFrame = 0;
-    applyLayout();
-  });
-}
-
-function applyLayout() {
-  const { width: naturalWidth, height: naturalHeight } = terminalNaturalSize();
-  if (!naturalWidth || !naturalHeight) return;
-  const box = viewerBox();
-  const nextScale =
-    scaleMode === MODE_FIT_WIDTH
-      ? clampScale(Math.min(box.width / naturalWidth, box.height / naturalHeight))
-      : viewerScale;
-  termEl.style.transform = `scale(${nextScale})`;
-  viewportEl.style.width = `${Math.max(box.width, Math.ceil(naturalWidth * nextScale))}px`;
-  viewportEl.style.height = `${Math.max(box.height, Math.ceil(naturalHeight * nextScale))}px`;
-  currentScale = nextScale;
-  updateScaleLabel();
-}
-
-function scheduleBrowserResize() {
-  if (!canType || browserResizeFrame) return;
-  browserResizeFrame = requestAnimationFrame(() => {
-    browserResizeFrame = 0;
-    sendBrowserResize();
-  });
-}
-
-function sendBrowserResize() {
-  if (!canType || !socket || socket.readyState !== WebSocket.OPEN) return;
-  const grid = desiredBrowserGrid();
-  if (!grid) return;
-  const key = `${grid.cols}x${grid.rows}`;
-  if (key === lastSentResizeKey || (grid.cols === sourceCols && grid.rows === sourceRows)) {
-    return;
-  }
-  const frame = new Uint8Array(5);
-  const view = new DataView(frame.buffer);
-  frame[0] = KIND_RESIZE;
-  view.setUint16(1, grid.cols, false);
-  view.setUint16(3, grid.rows, false);
-  socket.send(frame);
-  lastSentResizeKey = key;
-}
-
-function desiredBrowserGrid() {
-  const { width: naturalWidth, height: naturalHeight } = terminalNaturalSize();
-  const cols = term.cols || sourceCols;
-  const rows = term.rows || sourceRows;
-  if (!naturalWidth || !naturalHeight || !cols || !rows) return null;
-  const cellWidth = naturalWidth / cols;
-  const cellHeight = naturalHeight / rows;
-  if (!Number.isFinite(cellWidth) || !Number.isFinite(cellHeight) || cellWidth <= 0 || cellHeight <= 0) {
-    return null;
-  }
-  const box = viewerBox();
-  return {
-    cols: clampInt(Math.floor(box.width / cellWidth), MIN_VIEWER_COLS, MAX_VIEWER_COLS),
-    rows: clampInt(Math.floor(box.height / cellHeight), MIN_VIEWER_ROWS, MAX_VIEWER_ROWS),
-  };
-}
-
-function terminalNaturalSize() {
-  const screen = termEl.querySelector(".xterm-screen");
-  const el = screen || termEl;
-  const rect = el.getBoundingClientRect();
-  return {
-    width: el.scrollWidth || rect.width,
-    height: el.scrollHeight || rect.height,
-  };
-}
-
-function clampInt(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function wireZoomControls() {
-  scheduleLayout();
-  zoomOutEl.addEventListener("click", () => setViewerScale(currentScale - SCALE_STEP));
-  zoomInEl.addEventListener("click", () => setViewerScale(currentScale + SCALE_STEP));
-  zoomResetEl.addEventListener("click", () => setScaleMode(MODE_FIT_WIDTH));
-  scaleLabelEl.addEventListener("click", () => setViewerScale(DEFAULT_SCALE));
-  termEl.addEventListener("click", () => term.focus());
-  fitEl.addEventListener(
-    "wheel",
-    (event) => {
-      if (!event.ctrlKey) return;
-      event.preventDefault();
-      setViewerScale(currentScale + (event.deltaY < 0 ? SCALE_STEP : -SCALE_STEP));
-    },
-    { passive: false },
-  );
-}
-
-function viewerBox() {
-  const style = getComputedStyle(fitEl);
-  const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
-  const paddingY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
-  return {
-    width: Math.max(0, fitEl.clientWidth - paddingX),
-    height: Math.max(0, fitEl.clientHeight - paddingY),
-  };
-}
-
-function updateScaleLabel() {
-  const percent = Math.round(currentScale * 100);
-  const grid = sourceCols && sourceRows ? ` ${sourceCols}x${sourceRows}` : "";
-  scaleLabelEl.textContent = scaleMode === MODE_FIT_WIDTH ? `fit ${percent}%${grid}` : `${percent}%${grid}`;
-  zoomResetEl.classList.toggle("active", scaleMode === MODE_FIT_WIDTH);
-}
-
 function connect() {
   if (stopped) return;
   setStatus("connecting...", false);
@@ -371,10 +374,8 @@ function connect() {
   socket.binaryType = "arraybuffer";
 
   socket.onopen = () => {
-    lastSentResizeKey = "";
     sendAuth();
     setStatus(liveLabel, true);
-    scheduleBrowserResize();
   };
   socket.onmessage = (event) => handleFrame(event.data);
   socket.onclose = (event) => handleClose(event.code);
@@ -420,4 +421,5 @@ function promptAndReconnect(message) {
 }
 
 connect();
+scheduleLayout();
 term.focus();

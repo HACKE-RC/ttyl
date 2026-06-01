@@ -214,10 +214,12 @@ export class Relay {
 
     if (conn.role === "broadcaster") {
       switch (frame.kind) {
-        case Kind.Output:
-          this.scrollback.append(frame.data ?? new Uint8Array(0));
+        case Kind.Output: {
+          const payload = frame.data ?? new Uint8Array(0);
+          this.scrollback.append(payload);
           this.fanOutToViewers(data);
           return;
+        }
         case Kind.Resize:
           this.lastResize = data.slice();
           this.fanOutToViewers(data);
@@ -226,18 +228,20 @@ export class Relay {
         case Kind.Auth:
           return; // a broadcaster does not send these once authed
       }
-    } else if (conn.writer && this.broadcaster) {
-      switch (frame.kind) {
-        case Kind.Input:
-        case Kind.Resize:
-          // Only a viewer that proved the control key may control the session.
-          // Resize is upstream too: the read-write browser can own the PTY
-          // geometry, then the broadcaster confirms it back to all viewers.
-          this.broadcaster.send(data);
-          return;
-        case Kind.Output:
-        case Kind.Auth:
-          return;
+    } else if (conn.role === "viewer") {
+      if (conn.writer && this.broadcaster) {
+        switch (frame.kind) {
+          case Kind.Input:
+            // Only a viewer that proved the control key may type into the
+            // session. Viewer geometry never flows upstream; the broadcaster's
+            // PTY grid is the canonical size.
+            this.broadcaster.send(data);
+            return;
+          case Kind.Output:
+          case Kind.Resize:
+          case Kind.Auth:
+            return;
+        }
       }
     }
   }

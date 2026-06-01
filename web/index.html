@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ttyl</title>
+  <link rel="icon" href="data:," />
   <link rel="stylesheet" href="/static/xterm.css" />
   <style>
     /* Fonts are not loaded from any third party. The viewer uses locally
@@ -56,7 +57,7 @@
     #controls {
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 4px;
       flex: 0 0 auto;
     }
     #controls button {
@@ -80,51 +81,56 @@
       color: #9ece6a;
     }
     #scale-label {
-      min-width: 40px;
+      min-width: 44px;
       text-align: right;
       color: #c8d3f5;
       font-variant-numeric: tabular-nums;
     }
-    /* The viewer scales the streamed terminal grid locally. */
+    /* The browser displays the source PTY grid and scales it visually. */
     #fit {
       flex: 1 1 auto;
       min-height: 0;
-      overflow: auto;
-      overscroll-behavior: contain;
-      -webkit-overflow-scrolling: touch;
-      padding: 10px;
+      overflow: hidden;
     }
     #viewport {
       position: relative;
-      min-width: 100%;
-      min-height: 100%;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      touch-action: none;
+    }
+    #stage {
+      position: absolute;
+      top: 0;
+      left: 0;
+      transform-origin: top left;
     }
     #terminal {
       width: max-content;
-      transform-origin: top left;
     }
-    /* Hide xterm's reserved viewport scrollbar track for a clean edge; mouse
-      wheel scrollback still works. */
-    .xterm-viewport {
+    #terminal .xterm-viewport {
+      overflow: hidden !important;
       scrollbar-width: none;
     }
-    .xterm-viewport::-webkit-scrollbar {
+    #terminal .xterm-viewport::-webkit-scrollbar {
       display: none;
     }
   </style>
 </head>
 <body>
-  <div id="fit"><div id="viewport"><div id="terminal"></div></div></div>
+  <div id="fit"><div id="viewport"><div id="stage"><div id="terminal"></div></div></div></div>
   <div id="status">
     <div id="status-main"><span class="dot"></span><span id="status-text">connecting...</span></div>
-    <div id="controls" aria-label="Viewer scale controls">
-      <button id="zoom-out" type="button" aria-label="Make terminal smaller">A-</button>
-      <button id="zoom-reset" type="button" aria-label="Fit terminal to browser">Fit</button>
-      <button id="zoom-in" type="button" aria-label="Make terminal larger">A+</button>
+    <div id="controls" aria-label="Viewer controls">
+      <button id="zoom-out" type="button" title="Zoom out" aria-label="Zoom out">-</button>
+      <button id="mode-fit" type="button" title="Fit source grid" aria-label="Fit source grid">Fit</button>
+      <button id="mode-readable" type="button" title="Readable crop" aria-label="Readable crop">Read</button>
+      <button id="mode-actual" type="button" title="Actual size" aria-label="Actual size">1:1</button>
+      <button id="zoom-in" type="button" title="Zoom in" aria-label="Zoom in">+</button>
       <span id="scale-label">100%</span>
     </div>
   </div>
   <script src="/static/xterm.js"></script>
-  <script src="/static/viewer.js?v=viewer-browser-fit-default-1"></script>
+  <script src="/static/viewer.js?v=viewer-readable-viewport-1"></script>
 </body>
 </html>
