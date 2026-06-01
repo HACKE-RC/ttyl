@@ -76,15 +76,13 @@ ttyl stream
 ```
 
 There is one canonical PTY grid for the running command. By default the
-broadcaster's own terminal window owns that grid (it tracks your window as you
-resize it), so your local terminal never has dead space. Browser viewers do not
-resize that PTY. Instead, the browser renders the exact source grid in its own
-viewport. The default browser mode keeps cells readable and lets you pan if rows
-or columns are clipped, while keeping the full terminal height visible when
-possible so bottom prompts/status bars do not disappear. Fit shows the whole
-source grid when you need context.
-This keeps full-screen TUIs correct because their cursor positions and wrap
-decisions are interpreted at the same dimensions the source PTY used.
+broadcaster's terminal owns that grid, so resizing your local terminal can resize
+the streamed command. Browser viewers do not resize the PTY. They render the
+source grid in a browser viewport with three modes:
+
+- **Read**: default stable, readable cell size; pan if content is clipped.
+- **Fit**: scale the whole source grid into the browser.
+- **1:1**: render at the terminal's natural size.
 
 To pin a fixed canonical size for everyone instead (no window tracking):
 
@@ -92,10 +90,9 @@ To pin a fixed canonical size for everyone instead (no window tracking):
 ttyl stream --size 100x30
 ```
 
-`--follow-terminal-size` makes the window-tracking explicit; it is the default
-whenever you stream from a real terminal. When there is no local terminal
-(headless or piped output), the explicit `--size` value or the default `80x24`
-grid is used; browser viewport size still never feeds back into the PTY.
+`--follow-terminal-size` makes the window tracking explicit; it is the default
+when streaming from a real terminal. Browser viewport size never feeds back into
+the PTY.
 
 By default, this generates three URLs:
 - **Read-Write**: Grants viewers the ability to watch and type.
