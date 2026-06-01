@@ -27,8 +27,8 @@ const BASE_FONT_SIZE = 15;
 const MODE_FIT = "fit";
 const MODE_READABLE = "readable";
 const MODE_ACTUAL = "actual";
-const MIN_READABLE_CELL_WIDTH = 7;
-const MIN_READABLE_CELL_HEIGHT = 12;
+const MIN_READABLE_CELL_WIDTH = 9;
+const MIN_READABLE_CELL_HEIGHT = 18;
 const ZOOM_STEP = 1.15;
 const MIN_USER_ZOOM = 0.25;
 const MAX_USER_ZOOM = 5;
@@ -133,13 +133,14 @@ function applyLayout() {
   if (!natural.width || !natural.height) return;
   const box = viewerBox();
   if (!box.width || !box.height) return;
+  const wasFollowingBottom = !lastLayout || yOffset >= lastLayout.maxY - 2;
   const scales = scaleChoices(natural, box);
   const baseScale = scales[scaleMode] ?? scales[MODE_READABLE];
-  const scale = Math.max(scales[MODE_FIT], baseScale * userZoom);
+  const scale = baseScale * userZoom;
   const maxX = Math.max(0, natural.width * scale - box.width);
   const maxY = Math.max(0, natural.height * scale - box.height);
   xOffset = clamp(xOffset, 0, maxX);
-  yOffset = clamp(yOffset, 0, maxY);
+  yOffset = wasFollowingBottom ? maxY : clamp(yOffset, 0, maxY);
   viewportEl.style.width = `${box.width}px`;
   viewportEl.style.height = `${box.height}px`;
   stageEl.style.width = `${natural.width}px`;
@@ -163,14 +164,13 @@ function scaleChoices(natural, box) {
     MIN_READABLE_CELL_WIDTH / cellWidth,
     MIN_READABLE_CELL_HEIGHT / cellHeight,
   );
-  // Default to a legible view only when it can still show the whole vertical
-  // grid. Full-screen TUIs keep prompts/status bars at the bottom; hiding them
-  // by default is worse than needing horizontal pan.
-  const readableScale = clamp(readableTarget, containScale, heightFit);
+  // Read mode is a browser camera: keep character cells legible and stable,
+  // then crop/pan the source grid instead of resizing the source PTY.
+  const readableScale = readableTarget;
   return {
     [MODE_FIT]: containScale,
     [MODE_READABLE]: readableScale,
-    [MODE_ACTUAL]: Math.max(containScale, 1),
+    [MODE_ACTUAL]: 1,
   };
 }
 
@@ -254,9 +254,14 @@ function terminalNaturalSize() {
   const el = screen || termEl;
   const rect = el.getBoundingClientRect();
   return {
-    width: el.scrollWidth || rect.width,
-    height: el.scrollHeight || rect.height,
+    width: parseCssPx(el.style.width) || el.scrollWidth || rect.width,
+    height: parseCssPx(el.style.height) || el.scrollHeight || rect.height,
   };
+}
+
+function parseCssPx(value) {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function viewerBox() {
