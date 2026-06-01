@@ -6,6 +6,13 @@ export const DEFAULT_SERVER = "http://localhost:8080";
 export const DEFAULT_STREAM_COLS = 80;
 export const DEFAULT_STREAM_ROWS = 24;
 
+// Bounds on a PTY grid, shared by --size parsing and live resize validation so
+// the two can never disagree on what counts as a plausible terminal.
+export const MIN_STREAM_COLS = 20;
+export const MIN_STREAM_ROWS = 5;
+export const MAX_STREAM_COLS = 500;
+export const MAX_STREAM_ROWS = 200;
+
 const UNIT_SECONDS: Record<string, number> = {
   s: 1,
   m: 60,
@@ -61,11 +68,16 @@ export function parseTerminalSize(input: string): TerminalSize | undefined {
   }
   const cols = Number(match[1]);
   const rows = Number(match[2]);
-  if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 20 || rows < 5) {
-    throw new Error(`invalid --size "${input}": minimum size is 20x5`);
+  if (
+    !Number.isInteger(cols) ||
+    !Number.isInteger(rows) ||
+    cols < MIN_STREAM_COLS ||
+    rows < MIN_STREAM_ROWS
+  ) {
+    throw new Error(`invalid --size "${input}": minimum size is ${MIN_STREAM_COLS}x${MIN_STREAM_ROWS}`);
   }
-  if (cols > 500 || rows > 200) {
-    throw new Error(`invalid --size "${input}": maximum size is 500x200`);
+  if (cols > MAX_STREAM_COLS || rows > MAX_STREAM_ROWS) {
+    throw new Error(`invalid --size "${input}": maximum size is ${MAX_STREAM_COLS}x${MAX_STREAM_ROWS}`);
   }
   return { cols, rows };
 }

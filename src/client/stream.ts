@@ -8,6 +8,10 @@ import { encodeAuthPayload } from "../core/auth";
 import {
   DEFAULT_STREAM_COLS,
   DEFAULT_STREAM_ROWS,
+  MAX_STREAM_COLS,
+  MAX_STREAM_ROWS,
+  MIN_STREAM_COLS,
+  MIN_STREAM_ROWS,
   parseLifetime,
   parseTerminalSize,
   printLinks,
@@ -31,10 +35,6 @@ export interface StreamArgs {
 // buffered bytes rather than growing memory without bound (viewers see a gap;
 // the live mirror is unaffected).
 const SEND_BUFFER_CAP = 16 * 1024 * 1024;
-const MIN_STREAM_COLS = 20;
-const MIN_STREAM_ROWS = 5;
-const MAX_STREAM_COLS = 500;
-const MAX_STREAM_ROWS = 200;
 
 export async function runStream(args: StreamArgs): Promise<void> {
   const ttl = parseLifetime(args.lifetime); // throws on bad input
@@ -171,6 +171,9 @@ export async function runStream(args: StreamArgs): Promise<void> {
     const buf = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
     process.stdout.write(buf);
     if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < SEND_BUFFER_CAP) {
+      // The Uint8Array is a view over node-pty's (possibly pooled) Buffer; this
+      // is safe only because encode() copies the bytes synchronously before the
+      // PTY can reuse the chunk. encode() must keep copying its input.
       ws.send(encode({ kind: Kind.Output, data: new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength) }));
     }
   });

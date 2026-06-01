@@ -10,7 +10,9 @@ import { Relay, type Conn, type PersistState, type Role } from "../core/relay";
 import { hashPassword, type StoredPassword } from "../core/auth";
 import { newSessionID } from "../core/base32";
 import {
+  CONNECT_GRACE_MS,
   CONTENT_TYPE,
+  isAbandoned,
   parseTtlParam,
   resolveTtlSeconds,
   securityHeaders,
@@ -34,10 +36,6 @@ const KEY_LOCKED = "locked";
 const KEY_PWHASH = "pwhash";
 const KEY_PWSALT = "pwsalt";
 const KEY_PWITER = "pwiter";
-
-// A session that never receives a broadcaster within this window is reaped, so
-// an abandoned "never expire" session does not leave its record behind forever.
-const CONNECT_GRACE_MS = 2 * 60 * 1000;
 
 export interface Env {
   SESSION: DurableObjectNamespace<SessionRelay>;
@@ -71,6 +69,12 @@ export class SessionRelay extends DurableObject<Env> {
     ttlOverride?: number,
   ): Promise<void> {
     await this.ensureLoaded();
+    // create runs exactly once per session id (the id is freshly random, so the
+    // Durable Object is always brand new here). Guard anyway so a stray repeat
+    // can never clobber the live keys or resurrect a session that already ended.
+    if (this.created) {
+      return;
+    }
     this.created = true;
     this.controlKey = controlKey;
     this.adminKey = adminKey;
@@ -172,10 +176,10 @@ export class SessionRelay extends DurableObject<Env> {
 
   override async alarm(): Promise<void> {
     await this.ensureLoaded();
-    // For a "never expire" session, the alarm is only the connect grace: if a
-    // broadcaster is live, leave the session running (and set no new alarm, so
-    // it truly never expires); otherwise it was abandoned, so reap it.
-    if (this.never && this.relay?.hasBroadcaster) {
+    // For a "never expire" session, the alarm is only the connect grace: unless
+    // the session has been abandoned (no live broadcaster) leave it running (and
+    // set no new alarm, so it truly never expires); otherwise reap it.
+    if (this.never && !isAbandoned(this.relay?.hasBroadcaster ?? false)) {
       return;
     }
     if (this.relay) {

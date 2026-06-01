@@ -11,7 +11,9 @@ import { hashPassword } from "../core/auth";
 import { newSessionID } from "../core/base32";
 import {
   ADMIN_PATH,
+  CONNECT_GRACE_MS,
   CONTENT_TYPE,
+  isAbandoned,
   parseTtlParam,
   resolveTtlSeconds,
   securityHeaders,
@@ -33,9 +35,6 @@ const DEFAULT_TTL_MS = resolveTtlSeconds(undefined, process.env.SESSION_TTL_SECO
 const TRUST_PROXY = process.env.TRUST_PROXY === "1" || process.env.TRUST_PROXY === "true";
 const RL_LIMIT = 20;
 const RL_WINDOW_MS = 60_000;
-// A session never streamed to within this window is reaped (bounds abandoned
-// "never expire" sessions).
-const CONNECT_GRACE_MS = 2 * 60 * 1000;
 // Cap the JSON body we read on session creation; the only field is an optional
 // password, so this is generous.
 const MAX_BODY_BYTES = 4 * 1024;
@@ -141,7 +140,7 @@ async function createSession(
   }
   // Reap a session that is never streamed to (covers abandoned "never" sessions).
   graceTimer = setTimeout(() => {
-    if (!relay.hasBroadcaster) {
+    if (isAbandoned(relay.hasBroadcaster)) {
       relay.end();
     }
   }, CONNECT_GRACE_MS);

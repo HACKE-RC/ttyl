@@ -47,6 +47,21 @@ export const MAX_TTL_SECONDS = 30 * 24 * 60 * 60;
 // NEVER_TTL is the sentinel meaning "do not expire".
 export const NEVER_TTL = 0;
 
+// CONNECT_GRACE_MS bounds an abandoned session: one never streamed to within
+// this window after creation is reaped, so a "never expire" session that nobody
+// connects to does not linger forever. Shared so both adapters use the same
+// grace; each owns its own scheduling mechanism (a Node timer vs a Durable
+// Object alarm).
+export const CONNECT_GRACE_MS = 2 * 60 * 1000;
+
+// isAbandoned is the shared reap predicate evaluated when the connect-grace
+// deadline fires: a session with no live broadcaster has been abandoned and
+// should be reaped. Keeping it here (rather than re-deciding `!hasBroadcaster`
+// in each adapter) is what stops the lifecycle policy from drifting.
+export function isAbandoned(hasBroadcaster: boolean): boolean {
+  return !hasBroadcaster;
+}
+
 // clampTtl bounds a positive lifetime to [MIN, MAX]; NEVER_TTL passes through.
 export function clampTtl(seconds: number): number {
   if (seconds <= 0) {
