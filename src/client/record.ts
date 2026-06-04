@@ -28,11 +28,16 @@ interface RenderOptions {
   fontSize: number;
   cellWidth: number;
   cellHeight: number;
+  fontFamily: string;
+  paddingX: number;
+  paddingY: number;
 }
 
 const DEFAULT_OUTPUT = "ttyl-recording.mp4";
 const DEFAULT_FPS = 12;
-const DEFAULT_FONT_SIZE = 18;
+const DEFAULT_FONT_SIZE = 15;
+const DEFAULT_FONT_FAMILY =
+  "'JetBrains Mono', 'Symbols Nerd Font Mono', 'JetBrainsMono Nerd Font', 'JetBrainsMonoNL Nerd Font', 'Symbols Nerd Font', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const THEME = {
   foreground: "#c8d3f5",
   background: "#0b0e14",
@@ -70,8 +75,11 @@ export async function runRecord(args: RecordArgs): Promise<void> {
   const renderOptions: RenderOptions = {
     ...size,
     fontSize,
-    cellWidth: Math.ceil(fontSize * 0.6),
-    cellHeight: Math.ceil(fontSize * 1.25),
+    cellWidth: Math.max(1, Math.round(fontSize * 0.6)),
+    cellHeight: Math.max(1, Math.round(fontSize * 1.2)),
+    fontFamily: process.env.TTYL_RECORD_FONT?.trim() || DEFAULT_FONT_FAMILY,
+    paddingX: 6,
+    paddingY: 4,
   };
   const frameDir = await mkdtemp(join(tmpdir(), "ttyl-record-"));
   const terminal = new Terminal({
@@ -108,7 +116,6 @@ export async function runRecord(args: RecordArgs): Promise<void> {
   const interval = setInterval(() => {
     renderChain = renderChain.then(renderFrame, renderFrame);
   }, 1000 / fps);
-  renderChain = renderChain.then(renderFrame, renderFrame);
 
   const restoreInput = attachLocalInput(child);
   const exit = new Promise<void>((resolveExit) => {
@@ -227,14 +234,16 @@ function encodeFrames(frameDir: string, fps: number, output: string): Promise<vo
 }
 
 function renderTerminalSvg(terminal: Terminal, options: RenderOptions): string {
-  const width = even(options.cols * options.cellWidth);
-  const height = even(options.rows * options.cellHeight);
+  const width = even(options.cols * options.cellWidth + options.paddingX * 2);
+  const height = even(options.rows * options.cellHeight + options.paddingY * 2);
   const buffer = terminal.buffer.active;
   const nullCell = buffer.getNullCell();
   const rows: string[] = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+    `<style>text{white-space:pre;font-variant-ligatures:none;text-rendering:geometricPrecision}.cell-bg{shape-rendering:crispEdges}</style>`,
     `<rect width="100%" height="100%" fill="${THEME.background}"/>`,
   ];
+  const textRows: string[] = [];
   const startY = buffer.baseY;
   for (let y = 0; y < options.rows; y++) {
     const line = buffer.getLine(startY + y);
@@ -242,9 +251,10 @@ function renderTerminalSvg(terminal: Terminal, options: RenderOptions): string {
       continue;
     }
     rows.push(renderBackgrounds(line, y, nullCell, options));
-    rows.push(renderText(line, y, nullCell, options));
+    textRows.push(renderText(line, y, nullCell, options));
   }
   rows.push(renderCursor(terminal, options));
+  rows.push(...textRows);
   rows.push("</svg>");
   return rows.join("");
 }
@@ -266,7 +276,7 @@ function renderBackgrounds(
       runColor = color;
     } else if (runStart !== -1 && color !== runColor) {
       rects.push(
-        `<rect x="${runStart * options.cellWidth}" y="${y * options.cellHeight}" width="${(x - runStart) * options.cellWidth}" height="${options.cellHeight}" fill="${runColor}"/>`,
+        `<rect class="cell-bg" x="${options.paddingX + runStart * options.cellWidth}" y="${options.paddingY + y * options.cellHeight}" width="${(x - runStart) * options.cellWidth}" height="${options.cellHeight}" fill="${runColor}"/>`,
       );
       runStart = color ? x : -1;
       runColor = color;
@@ -284,16 +294,19 @@ function renderText(
   const out: string[] = [];
   let run = "";
   let runStart = 0;
+  let runCells = 0;
   let runStyle = "";
   for (let x = 0; x <= options.cols; x++) {
     const cell = x < options.cols ? line.getCell(x, nullCell) : undefined;
-    const chars = cell && cell.getWidth() > 0 && !cell.isInvisible() ? cell.getChars() || " " : "";
+    const width = cell?.getWidth() ?? 0;
+    const chars = cell && width > 0 && !cell.isInvisible() ? cell.getChars() || " " : "";
     const style = cell ? textStyle(cell) : "";
     if (!chars || (run && style !== runStyle)) {
-      if (run.trimEnd()) {
-        out.push(textElement(runStart, y, run.replace(/\s+$/, ""), runStyle, options));
+      if (/\S/u.test(run)) {
+        out.push(textElement(runStart, y, run, runStyle, runCells, options));
       }
       run = "";
+      runCells = 0;
     }
     if (chars) {
       if (!run) {
@@ -301,6 +314,7 @@ function renderText(
         runStyle = style;
       }
       run += chars;
+      runCells += width;
     }
   }
   return out.join("");
@@ -313,19 +327,40 @@ function renderCursor(terminal: Terminal, options: RenderOptions): string {
   if (x < 0 || x >= options.cols || y < 0 || y >= options.rows) {
     return "";
   }
-  return `<rect x="${x * options.cellWidth}" y="${y * options.cellHeight}" width="${options.cellWidth}" height="${options.cellHeight}" fill="none" stroke="${THEME.cursor}" stroke-width="1"/>`;
+  const px = options.paddingX + x * options.cellWidth;
+  const py = options.paddingY + y * options.cellHeight;
+  return (
+    `<rect class="cell-bg" x="${px}" y="${py}" width="${options.cellWidth}" height="${options.cellHeight}" fill="${THEME.cursor}" opacity="0.22"/>` +
+    `<rect class="cell-bg" x="${px}" y="${py}" width="${options.cellWidth}" height="${options.cellHeight}" fill="none" stroke="${THEME.cursor}" stroke-width="1" opacity="0.85"/>`
+  );
 }
 
-function textElement(x: number, y: number, text: string, style: string, options: RenderOptions): string {
-  const px = x * options.cellWidth;
-  const baseline = y * options.cellHeight + Math.round(options.fontSize * 0.95);
-  return `<text x="${px}" y="${baseline}" ${style} font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="${options.fontSize}" dominant-baseline="alphabetic">${escapeXml(text)}</text>`;
+function textElement(
+  x: number,
+  y: number,
+  text: string,
+  style: string,
+  cells: number,
+  options: RenderOptions,
+): string {
+  const px = options.paddingX + x * options.cellWidth;
+  const baseline =
+    options.paddingY +
+    y * options.cellHeight +
+    Math.round((options.cellHeight - options.fontSize) / 2 + options.fontSize * 0.82);
+  const textLength = Math.max(cells * options.cellWidth, options.cellWidth);
+  return `<text x="${px}" y="${baseline}" ${style} font-family="${escapeXml(options.fontFamily)}" font-size="${options.fontSize}" dominant-baseline="alphabetic" xml:space="preserve" textLength="${textLength}" lengthAdjust="spacingAndGlyphs">${escapeXml(text)}</text>`;
 }
 
 function textStyle(cell: ReturnType<Terminal["buffer"]["active"]["getNullCell"]>): string {
   const weight = cell.isBold() ? " font-weight=\"700\"" : "";
   const style = cell.isItalic() ? " font-style=\"italic\"" : "";
-  const decoration = cell.isUnderline() ? " text-decoration=\"underline\"" : "";
+  const decorations = [
+    cell.isUnderline() ? "underline" : "",
+    cell.isStrikethrough() ? "line-through" : "",
+    cell.isOverline() ? "overline" : "",
+  ].filter(Boolean);
+  const decoration = decorations.length > 0 ? ` text-decoration="${decorations.join(" ")}"` : "";
   return `fill="${fgColor(cell)}"${weight}${style}${decoration}`;
 }
 
@@ -338,13 +373,13 @@ function fgColor(cell: ReturnType<Terminal["buffer"]["active"]["getNullCell"]>):
 
 function baseFgColor(cell: ReturnType<Terminal["buffer"]["active"]["getNullCell"]>): string {
   if (cell.isFgRGB()) {
-    return hex24(cell.getFgColor());
+    return maybeDim(cell, hex24(cell.getFgColor()));
   }
   if (cell.isFgPalette()) {
     const color = cell.getFgColor();
-    return paletteColor(cell.isBold() && color < 8 ? color + 8 : color);
+    return maybeDim(cell, paletteColor(cell.isBold() && color < 8 ? color + 8 : color));
   }
-  return cell.isDim() ? "#7f89a6" : THEME.foreground;
+  return cell.isDim() ? dimColor(THEME.foreground) : THEME.foreground;
 }
 
 function bgColor(cell: ReturnType<Terminal["buffer"]["active"]["getNullCell"]>): string {
@@ -392,6 +427,17 @@ function hex24(value: number): string {
 
 function rgbHex(r: number, g: number, b: number): string {
   return `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function maybeDim(cell: ReturnType<Terminal["buffer"]["active"]["getNullCell"]>, color: string): string {
+  return cell.isDim() ? dimColor(color) : color;
+}
+
+function dimColor(color: string): string {
+  const r = Number.parseInt(color.slice(1, 3), 16);
+  const g = Number.parseInt(color.slice(3, 5), 16);
+  const b = Number.parseInt(color.slice(5, 7), 16);
+  return rgbHex(Math.round(r * 0.55), Math.round(g * 0.55), Math.round(b * 0.55));
 }
 
 function even(value: number): number {
