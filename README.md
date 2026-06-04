@@ -120,6 +120,32 @@ only when you want to pin the recording to a fixed grid:
 ttyl record --size 100x30 --output demo.webm -- bash
 ```
 
+Recording defaults can be set in the same config file used by `ttyl init`
+(`~/.config/ttyl/config.json` on Linux):
+
+```json
+{
+  "record": {
+    "output": "demo.mp4",
+    "fps": 24,
+    "fontSize": 15,
+    "fontFamily": "JetBrains Mono",
+    "paddingX": 6,
+    "paddingY": 4,
+    "theme": {
+      "foreground": "#c8d3f5",
+      "background": "#0b0e14",
+      "cursor": "#c8d3f5"
+    }
+  }
+}
+```
+
+Command-line flags override config values for a single recording.
+Supported `record` keys are `output`, `size`, `fps`, `fontSize`,
+`fontFamily`, `cellWidth`, `cellHeight`, `paddingX`, `paddingY`, and `theme`
+(`foreground`, `background`, `cursor`, or a 16-color `ansi` array).
+
 ### Session Lifetime
 
 Sessions terminate immediately upon shell exit. They also enforce a maximum lifetime duration (default: 8 hours). To specify a custom lifetime:
@@ -193,6 +219,7 @@ This queries the running session via a local IPC socket to reprint the URLs secu
 | Session lifetime (client) | `ttyl stream --lifetime <duration>` | Relay default |
 | Session lifetime (server) | `SESSION_TTL_SECONDS` env var / `wrangler.toml` | 8 hours (28800) |
 | Session password | `ttyl stream --password` or Dashboard | None |
+| Recording defaults | `record` in `~/.config/ttyl/config.json` | Current terminal size, `ttyl-recording.mp4`, 12 fps |
 | Dashboard / kick / lock | `dashboard:` link, or `ttyl admin <link>` | Per session |
 | Sessions per IP | `ratelimits` in `wrangler.toml` (Worker) | 20 / minute |
 | Server bind address | `--port`/`--host` flags or `PORT`/`HOST` env var | `0.0.0.0:8080` |

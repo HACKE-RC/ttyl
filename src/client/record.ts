@@ -7,20 +7,10 @@ import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
 import { Terminal } from "@xterm/headless";
-import {
-  DEFAULT_STREAM_COLS,
-  DEFAULT_STREAM_ROWS,
-  parseTerminalSize,
-  terminalSizeFromTty,
-} from "./util";
+import { load } from "./config";
+import { type RecordCliArgs, type RecordSettings, resolveRecordSettings } from "./record-settings";
 
-export interface RecordArgs {
-  output: string;
-  size: string;
-  fps: string;
-  fontSize: string;
-  command: string[];
-}
+export type RecordArgs = RecordCliArgs;
 
 interface RenderOptions {
   cols: number;
@@ -31,55 +21,23 @@ interface RenderOptions {
   fontFamily: string;
   paddingX: number;
   paddingY: number;
+  settings: RecordSettings;
 }
 
-const DEFAULT_OUTPUT = "ttyl-recording.mp4";
-const DEFAULT_FPS = 12;
-const DEFAULT_FONT_SIZE = 15;
-const DEFAULT_FONT_FAMILY =
-  "'JetBrains Mono', 'Symbols Nerd Font Mono', 'JetBrainsMono Nerd Font', 'JetBrainsMonoNL Nerd Font', 'Symbols Nerd Font', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-const THEME = {
-  foreground: "#c8d3f5",
-  background: "#0b0e14",
-  cursor: "#c8d3f5",
-};
-const ANSI = [
-  "#15161e",
-  "#f7768e",
-  "#9ece6a",
-  "#e0af68",
-  "#7aa2f7",
-  "#bb9af7",
-  "#7dcfff",
-  "#a9b1d6",
-  "#414868",
-  "#ff899d",
-  "#9fe044",
-  "#faba4a",
-  "#8db0ff",
-  "#c7a9ff",
-  "#a4daff",
-  "#c0caf5",
-];
-
 export async function runRecord(args: RecordArgs): Promise<void> {
-  const fallbackSize = {
-    cols: DEFAULT_STREAM_COLS,
-    rows: DEFAULT_STREAM_ROWS,
-  };
-  const size = parseTerminalSize(args.size) ?? terminalSizeFromTty(process.stdout, fallbackSize);
-  const fps = parsePositiveInt(args.fps, DEFAULT_FPS, "--fps");
-  const fontSize = parsePositiveInt(args.fontSize, DEFAULT_FONT_SIZE, "--font-size");
+  const settings = resolveRecordSettings(args, await load(), process.stdout);
+  const { size, fps, fontSize } = settings;
   const command = args.command.length > 0 ? args.command : [process.env.SHELL || "/bin/sh"];
-  const output = resolve(args.output || DEFAULT_OUTPUT);
+  const output = resolve(settings.output);
   const renderOptions: RenderOptions = {
     ...size,
     fontSize,
-    cellWidth: Math.max(1, Math.round(fontSize * 0.6)),
-    cellHeight: Math.max(1, Math.round(fontSize * 1.2)),
-    fontFamily: process.env.TTYL_RECORD_FONT?.trim() || DEFAULT_FONT_FAMILY,
-    paddingX: 6,
-    paddingY: 4,
+    cellWidth: settings.cellWidth,
+    cellHeight: settings.cellHeight,
+    fontFamily: settings.fontFamily,
+    paddingX: settings.paddingX,
+    paddingY: settings.paddingY,
+    settings,
   };
   const frameDir = await mkdtemp(join(tmpdir(), "ttyl-record-"));
   const terminal = new Terminal({
@@ -87,7 +45,7 @@ export async function runRecord(args: RecordArgs): Promise<void> {
     rows: size.rows,
     scrollback: 0,
     allowProposedApi: true,
-    theme: THEME,
+    theme: settings.theme,
     logLevel: "off",
   });
 
@@ -165,17 +123,6 @@ export async function runRecord(args: RecordArgs): Promise<void> {
   }
 }
 
-function parsePositiveInt(value: string, fallback: number, flag: string): number {
-  if (!value) {
-    return fallback;
-  }
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 120) {
-    throw new Error(`invalid ${flag} "${value}": use a positive integer`);
-  }
-  return parsed;
-}
-
 function attachLocalInput(child: { write(data: string | Buffer): void }): () => void {
   const stdin = process.stdin;
   const isTty = Boolean(stdin.isTTY);
@@ -241,7 +188,7 @@ function renderTerminalSvg(terminal: Terminal, options: RenderOptions): string {
   const rows: string[] = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
     `<style>text{white-space:pre;font-variant-ligatures:none;text-rendering:geometricPrecision}.cell-bg{shape-rendering:crispEdges}</style>`,
-    `<rect width="100%" height="100%" fill="${THEME.background}"/>`,
+    `<rect width="100%" height="100%" fill="${options.settings.theme.background}"/>`,
   ];
   const textRows: string[] = [];
   const startY = buffer.baseY;
@@ -270,7 +217,7 @@ function renderBackgrounds(
   let runColor = "";
   for (let x = 0; x <= options.cols; x++) {
     const cell = x < options.cols ? line.getCell(x, nullCell) : undefined;
-    const color = cell ? bgColor(cell) : "";
+    const color = cell ? bgColor(cell, options) : "";
     if (color && runStart === -1) {
       runStart = x;
       runColor = color;
@@ -300,7 +247,7 @@ function renderText(
     const cell = x < options.cols ? line.getCell(x, nullCell) : undefined;
     const width = cell?.getWidth() ?? 0;
     const chars = cell && width > 0 && !cell.isInvisible() ? cell.getChars() || " " : "";
-    const style = cell ? textStyle(cell) : "";
+    const style = cell ? textStyle(cell, options) : "";
     if (!chars || (run && style !== runStyle)) {
       if (/\S/u.test(run)) {
         out.push(textElement(runStart, y, run, runStyle, runCells, options));
@@ -330,8 +277,8 @@ function renderCursor(terminal: Terminal, options: RenderOptions): string {
   const px = options.paddingX + x * options.cellWidth;
   const py = options.paddingY + y * options.cellHeight;
   return (
-    `<rect class="cell-bg" x="${px}" y="${py}" width="${options.cellWidth}" height="${options.cellHeight}" fill="${THEME.cursor}" opacity="0.22"/>` +
-    `<rect class="cell-bg" x="${px}" y="${py}" width="${options.cellWidth}" height="${options.cellHeight}" fill="none" stroke="${THEME.cursor}" stroke-width="1" opacity="0.85"/>`
+    `<rect class="cell-bg" x="${px}" y="${py}" width="${options.cellWidth}" height="${options.cellHeight}" fill="${options.settings.theme.cursor}" opacity="0.22"/>` +
+    `<rect class="cell-bg" x="${px}" y="${py}" width="${options.cellWidth}" height="${options.cellHeight}" fill="none" stroke="${options.settings.theme.cursor}" stroke-width="1" opacity="0.85"/>`
   );
 }
 
@@ -352,7 +299,7 @@ function textElement(
   return `<text x="${px}" y="${baseline}" ${style} font-family="${escapeXml(options.fontFamily)}" font-size="${options.fontSize}" dominant-baseline="alphabetic" xml:space="preserve" textLength="${textLength}" lengthAdjust="spacingAndGlyphs">${escapeXml(text)}</text>`;
 }
 
-function textStyle(cell: ReturnType<Terminal["buffer"]["active"]["getNullCell"]>): string {
+function textStyle(cell: ReturnType<Terminal["buffer"]["active"]["getNullCell"]>, options: RenderOptions): string {
   const weight = cell.isBold() ? " font-weight=\"700\"" : "";
   const style = cell.isItalic() ? " font-style=\"italic\"" : "";
   const decorations = [
@@ -361,47 +308,47 @@ function textStyle(cell: ReturnType<Terminal["buffer"]["active"]["getNullCell"]>
     cell.isOverline() ? "overline" : "",
   ].filter(Boolean);
   const decoration = decorations.length > 0 ? ` text-decoration="${decorations.join(" ")}"` : "";
-  return `fill="${fgColor(cell)}"${weight}${style}${decoration}`;
+  return `fill="${fgColor(cell, options.settings)}"${weight}${style}${decoration}`;
 }
 
-function fgColor(cell: ReturnType<Terminal["buffer"]["active"]["getNullCell"]>): string {
+function fgColor(cell: ReturnType<Terminal["buffer"]["active"]["getNullCell"]>, settings: RecordSettings): string {
   if (cell.isInverse()) {
-    return baseBgColor(cell) || THEME.background;
+    return baseBgColor(cell, settings) || settings.theme.background;
   }
-  return baseFgColor(cell);
+  return baseFgColor(cell, settings);
 }
 
-function baseFgColor(cell: ReturnType<Terminal["buffer"]["active"]["getNullCell"]>): string {
+function baseFgColor(cell: ReturnType<Terminal["buffer"]["active"]["getNullCell"]>, settings: RecordSettings): string {
   if (cell.isFgRGB()) {
     return maybeDim(cell, hex24(cell.getFgColor()));
   }
   if (cell.isFgPalette()) {
     const color = cell.getFgColor();
-    return maybeDim(cell, paletteColor(cell.isBold() && color < 8 ? color + 8 : color));
+    return maybeDim(cell, paletteColor(cell.isBold() && color < 8 ? color + 8 : color, settings));
   }
-  return cell.isDim() ? dimColor(THEME.foreground) : THEME.foreground;
+  return cell.isDim() ? dimColor(settings.theme.foreground) : settings.theme.foreground;
 }
 
-function bgColor(cell: ReturnType<Terminal["buffer"]["active"]["getNullCell"]>): string {
+function bgColor(cell: ReturnType<Terminal["buffer"]["active"]["getNullCell"]>, options: RenderOptions): string {
   if (cell.isInverse()) {
-    return baseFgColor(cell);
+    return baseFgColor(cell, options.settings);
   }
-  return baseBgColor(cell);
+  return baseBgColor(cell, options.settings);
 }
 
-function baseBgColor(cell: ReturnType<Terminal["buffer"]["active"]["getNullCell"]>): string {
+function baseBgColor(cell: ReturnType<Terminal["buffer"]["active"]["getNullCell"]>, settings: RecordSettings): string {
   if (cell.isBgRGB()) {
     return hex24(cell.getBgColor());
   }
   if (cell.isBgPalette()) {
-    return paletteColor(cell.getBgColor());
+    return paletteColor(cell.getBgColor(), settings);
   }
   return "";
 }
 
-function paletteColor(index: number): string {
-  if (index < ANSI.length) {
-    return ANSI[index] ?? THEME.foreground;
+function paletteColor(index: number, settings: RecordSettings): string {
+  if (index < settings.theme.ansi.length) {
+    return settings.theme.ansi[index] ?? settings.theme.foreground;
   }
   if (index >= 16 && index <= 231) {
     const n = index - 16;
@@ -414,7 +361,7 @@ function paletteColor(index: number): string {
     const v = 8 + (index - 232) * 10;
     return rgbHex(v, v, v);
   }
-  return THEME.foreground;
+  return settings.theme.foreground;
 }
 
 function cube(value: number): number {

@@ -1,6 +1,6 @@
-// Persists client settings (currently the default relay server URL) to a small
-// JSON file in the user's OS config directory, so the server need not be passed
-// on every stream. Locations follow each platform's convention:
+// Persists client settings to a small JSON file in the user's OS config
+// directory, so common stream and recording options need not be passed every
+// time. Locations follow each platform's convention:
 //   Linux/BSD: $XDG_CONFIG_HOME/ttyl/config.json (or ~/.config/ttyl/...)
 //   macOS:     ~/Library/Application Support/ttyl/config.json
 //   Windows:   %AppData%\ttyl\config.json
@@ -10,6 +10,27 @@ import { dirname, join } from "node:path";
 
 export interface Config {
   server?: string;
+  record?: RecordConfig;
+}
+
+export interface RecordConfig {
+  output?: string;
+  size?: string;
+  fps?: number | string;
+  fontSize?: number | string;
+  fontFamily?: string;
+  cellWidth?: number | string;
+  cellHeight?: number | string;
+  paddingX?: number | string;
+  paddingY?: number | string;
+  theme?: RecordThemeConfig;
+}
+
+export interface RecordThemeConfig {
+  foreground?: string;
+  background?: string;
+  cursor?: string;
+  ansi?: string[];
 }
 
 function configDir(): string {
