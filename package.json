@@ -23,6 +23,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
+    "@xterm/headless": "^6.0.0",
     "node-pty": "^1.0.0",
     "ws": "^8.18.0"
   },
