@@ -14,6 +14,7 @@ export interface Config {
 }
 
 export interface RecordConfig {
+  preset?: string;
   output?: string;
   size?: string;
   fps?: number | string;

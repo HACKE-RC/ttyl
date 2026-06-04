@@ -113,6 +113,14 @@ Record a command locally to MP4 or WebM without starting a browser:
 ttyl record --output demo.mp4 -- npm test
 ```
 
+Use a built-in preset when you want recording defaults without writing config:
+
+```bash
+ttyl record --preset presentation --output demo.mp4 -- npm test
+```
+
+Built-in presets are `ttyl`, `presentation`, `compact`, and `classic`.
+
 `ttyl record` uses your current terminal size by default. Use `--size COLSxROWS`
 only when you want to pin the recording to a fixed grid:
 
@@ -126,6 +134,7 @@ Recording defaults can be set in the same config file used by `ttyl init`
 ```json
 {
   "record": {
+    "preset": "ttyl",
     "output": "demo.mp4",
     "fps": 24,
     "fontSize": 15,
@@ -142,7 +151,7 @@ Recording defaults can be set in the same config file used by `ttyl init`
 ```
 
 Command-line flags override config values for a single recording.
-Supported `record` keys are `output`, `size`, `fps`, `fontSize`,
+Supported `record` keys are `preset`, `output`, `size`, `fps`, `fontSize`,
 `fontFamily`, `cellWidth`, `cellHeight`, `paddingX`, `paddingY`, and `theme`
 (`foreground`, `background`, `cursor`, or a 16-color `ansi` array).
 

@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_RECORD_FPS,
   DEFAULT_RECORD_OUTPUT,
+  DEFAULT_RECORD_PRESET,
   DEFAULT_RECORD_THEME,
   resolveRecordSettings,
   type RecordCliArgs,
 } from "../src/client/record-settings";
 
 const emptyArgs: RecordCliArgs = {
+  preset: "",
   output: "",
   size: "",
   fps: "",
@@ -21,9 +23,24 @@ describe("resolveRecordSettings", () => {
     const settings = resolveRecordSettings(emptyArgs, {}, { isTTY: true, columns: 120, rows: 32 });
 
     expect(settings.output).toBe(DEFAULT_RECORD_OUTPUT);
+    expect(settings.preset).toBe(DEFAULT_RECORD_PRESET);
     expect(settings.size).toEqual({ cols: 120, rows: 32 });
     expect(settings.fps).toBe(DEFAULT_RECORD_FPS);
     expect(settings.theme).toEqual(DEFAULT_RECORD_THEME);
+  });
+
+  it("selects built-in presets without hand-written config", () => {
+    const settings = resolveRecordSettings(
+      { ...emptyArgs, preset: "presentation" },
+      {},
+      { isTTY: true, columns: 120, rows: 32 },
+    );
+
+    expect(settings.preset).toBe("presentation");
+    expect(settings.fps).toBe(24);
+    expect(settings.fontSize).toBe(18);
+    expect(settings.paddingX).toBe(10);
+    expect(settings.paddingY).toBe(8);
   });
 
   it("uses record config as persistent defaults", () => {
@@ -69,10 +86,32 @@ describe("resolveRecordSettings", () => {
     expect(settings.theme.ansi).toEqual(DEFAULT_RECORD_THEME.ansi);
   });
 
+  it("lets record config choose a preset and override parts of it", () => {
+    const settings = resolveRecordSettings(
+      emptyArgs,
+      {
+        record: {
+          preset: "classic",
+          fps: 20,
+          theme: {
+            cursor: "#00ff00",
+          },
+        },
+      },
+      { isTTY: true, columns: 120, rows: 32 },
+    );
+
+    expect(settings.preset).toBe("classic");
+    expect(settings.fps).toBe(20);
+    expect(settings.theme.background).toBe("#000000");
+    expect(settings.theme.cursor).toBe("#00ff00");
+  });
+
   it("lets CLI flags override configured defaults", () => {
     const settings = resolveRecordSettings(
       {
         ...emptyArgs,
+        preset: "presentation",
         output: "cli.mp4",
         size: "90x20",
         fps: "30",
@@ -81,6 +120,7 @@ describe("resolveRecordSettings", () => {
       },
       {
         record: {
+          preset: "classic",
           output: "config.mp4",
           size: "100x30",
           fps: 24,
@@ -91,6 +131,7 @@ describe("resolveRecordSettings", () => {
       { isTTY: true, columns: 120, rows: 32 },
     );
 
+    expect(settings.preset).toBe("presentation");
     expect(settings.output).toBe("cli.mp4");
     expect(settings.size).toEqual({ cols: 90, rows: 20 });
     expect(settings.fps).toBe(30);
@@ -111,6 +152,8 @@ describe("resolveRecordSettings", () => {
 
   it("rejects invalid record config values", () => {
     expect(() => resolveRecordSettings(emptyArgs, { record: { fps: "fast" } }, {})).toThrow(/record\.fps/);
+    expect(() => resolveRecordSettings({ ...emptyArgs, preset: "nope" }, {}, {})).toThrow(/invalid --preset/);
+    expect(() => resolveRecordSettings(emptyArgs, { record: { preset: "nope" } }, {})).toThrow(/invalid --preset/);
     expect(() => resolveRecordSettings(emptyArgs, { record: { theme: { background: "black" } } }, {})).toThrow(
       /record\.theme\.background/,
     );

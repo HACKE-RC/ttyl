@@ -17,7 +17,7 @@ Commands:
 
 Flags:
   stream [--server <url>] [--view-only] [--password] [--lifetime <30m|8h|2d|never>] [--size <80x24>] [--follow-terminal-size] [-- command...]
-  record [--output <file>] [--size <COLSxROWS>] [--fps <n>] [--font-size <px>] [--font-family <name>] [-- command...]
+  record [--preset <name>] [--output <file>] [--size <COLSxROWS>] [--fps <n>] [--font-size <px>] [--font-family <name>] [-- command...]
   stop   [<session-id>]
   admin  [<dashboard-link>] [--server <url>] [--id <id>] [--key <admin-key>]
   init   [--server <url>]
@@ -50,6 +50,7 @@ async function main(): Promise<void> {
       }
       const { runRecord } = await import("./client/record");
       await runRecord({
+        preset: flagValue(flags, "-preset", "--preset") ?? "",
         output: flagValue(flags, "-output", "--output") ?? "",
         size: flagValue(flags, "-size", "--size") ?? "",
         fps: flagValue(flags, "-fps", "--fps") ?? "",
