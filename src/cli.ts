@@ -44,6 +44,10 @@ async function main(): Promise<void> {
     }
     case "record": {
       const { flags, command } = splitArgs(rest);
+      if (flagBool(flags, "-h", "--help")) {
+        process.stdout.write(USAGE);
+        return;
+      }
       const { runRecord } = await import("./client/record");
       await runRecord({
         output: flagValue(flags, "-output", "--output") ?? "",
