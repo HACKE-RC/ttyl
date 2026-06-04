@@ -21,7 +21,7 @@ Install the CLI globally via npm:
 npm install -g @rcx86/ttyl
 ```
 
-This installs the `ttyl` executable, which provides the `stream`, `init`, `serve`, `admin`, `links`, and `stop` commands.
+This installs the `ttyl` executable, which provides the `stream`, `record`, `init`, `serve`, `admin`, `links`, and `stop` commands.
 
 ---
 
@@ -103,6 +103,21 @@ To create a strictly view-only session (where no interactive link is generated):
 
 ```bash
 ttyl stream --view-only
+```
+
+### Local Recording
+
+Record a command locally to MP4 or WebM without starting a browser:
+
+```bash
+ttyl record --output demo.mp4 -- npm test
+```
+
+`ttyl record` uses your current terminal size by default. Use `--size COLSxROWS`
+only when you want to pin the recording to a fixed grid:
+
+```bash
+ttyl record --size 100x30 --output demo.webm -- bash
 ```
 
 ### Session Lifetime

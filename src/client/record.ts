@@ -7,7 +7,12 @@ import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
 import { Terminal } from "@xterm/headless";
-import { DEFAULT_STREAM_COLS, DEFAULT_STREAM_ROWS, parseTerminalSize } from "./util";
+import {
+  DEFAULT_STREAM_COLS,
+  DEFAULT_STREAM_ROWS,
+  parseTerminalSize,
+  terminalSizeFromTty,
+} from "./util";
 
 export interface RecordArgs {
   output: string;
@@ -53,10 +58,11 @@ const ANSI = [
 ];
 
 export async function runRecord(args: RecordArgs): Promise<void> {
-  const size = parseTerminalSize(args.size) ?? {
+  const fallbackSize = {
     cols: DEFAULT_STREAM_COLS,
     rows: DEFAULT_STREAM_ROWS,
   };
+  const size = parseTerminalSize(args.size) ?? terminalSizeFromTty(process.stdout, fallbackSize);
   const fps = parsePositiveInt(args.fps, DEFAULT_FPS, "--fps");
   const fontSize = parsePositiveInt(args.fontSize, DEFAULT_FONT_SIZE, "--font-size");
   const command = args.command.length > 0 ? args.command : [process.env.SHELL || "/bin/sh"];

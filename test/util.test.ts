@@ -3,6 +3,7 @@ import {
   DEFAULT_STREAM_COLS,
   DEFAULT_STREAM_ROWS,
   parseTerminalSize,
+  terminalSizeFromTty,
 } from "../src/client/util";
 
 describe("parseTerminalSize", () => {
@@ -27,5 +28,24 @@ describe("parseTerminalSize", () => {
 
   it("exposes the fixed default stream size", () => {
     expect({ cols: DEFAULT_STREAM_COLS, rows: DEFAULT_STREAM_ROWS }).toEqual({ cols: 80, rows: 24 });
+  });
+});
+
+describe("terminalSizeFromTty", () => {
+  const fallback = { cols: DEFAULT_STREAM_COLS, rows: DEFAULT_STREAM_ROWS };
+
+  it("uses a real TTY size when available", () => {
+    expect(terminalSizeFromTty({ isTTY: true, columns: 132, rows: 43 }, fallback)).toEqual({
+      cols: 132,
+      rows: 43,
+    });
+  });
+
+  it("falls back when there is no TTY", () => {
+    expect(terminalSizeFromTty({ isTTY: false, columns: 132, rows: 43 }, fallback)).toEqual(fallback);
+  });
+
+  it("falls back for implausible TTY sizes", () => {
+    expect(terminalSizeFromTty({ isTTY: true, columns: 10, rows: 2 }, fallback)).toEqual(fallback);
   });
 });

@@ -17,7 +17,7 @@ Commands:
 
 Flags:
   stream [--server <url>] [--view-only] [--password] [--lifetime <30m|8h|2d|never>] [--size <80x24>] [--follow-terminal-size] [-- command...]
-  record [--output <file>] [--size <80x24>] [--fps <n>] [--font-size <px>] [-- command...]
+  record [--output <file>] [--size <COLSxROWS>] [--fps <n>] [--font-size <px>] [-- command...]
   stop   [<session-id>]
   admin  [<dashboard-link>] [--server <url>] [--id <id>] [--key <admin-key>]
   init   [--server <url>]
