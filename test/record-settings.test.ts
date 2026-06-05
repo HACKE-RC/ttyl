@@ -105,6 +105,7 @@ describe("resolveRecordSettings", () => {
     expect(settings.fps).toBe(20);
     expect(settings.theme.background).toBe("#000000");
     expect(settings.theme.cursor).toBe("#00ff00");
+    expect(settings.theme.ansi[1]).toBe("#cd3131");
   });
 
   it("lets CLI flags override configured defaults", () => {
@@ -153,7 +154,9 @@ describe("resolveRecordSettings", () => {
   it("rejects invalid record config values", () => {
     expect(() => resolveRecordSettings(emptyArgs, { record: { fps: "fast" } }, {})).toThrow(/record\.fps/);
     expect(() => resolveRecordSettings({ ...emptyArgs, preset: "nope" }, {}, {})).toThrow(/invalid --preset/);
-    expect(() => resolveRecordSettings(emptyArgs, { record: { preset: "nope" } }, {})).toThrow(/invalid --preset/);
+    expect(() => resolveRecordSettings(emptyArgs, { record: { preset: "nope" } }, {})).toThrow(
+      /invalid record\.preset/,
+    );
     expect(() => resolveRecordSettings(emptyArgs, { record: { theme: { background: "black" } } }, {})).toThrow(
       /record\.theme\.background/,
     );

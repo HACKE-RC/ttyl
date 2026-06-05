@@ -26,7 +26,7 @@ export interface RecordTheme {
 }
 
 export interface RecordSettings {
-  preset: string;
+  preset: RecordPreset;
   output: string;
   size: TerminalSize;
   fps: number;
@@ -67,8 +67,7 @@ export const DEFAULT_RECORD_THEME: RecordTheme = {
     "#c0caf5",
   ],
 };
-export const DEFAULT_RECORD_PRESET = "ttyl";
-export const RECORD_PRESETS: Record<string, NonNullable<Config["record"]>> = {
+export const RECORD_PRESETS = {
   ttyl: {
     fps: DEFAULT_RECORD_FPS,
     fontSize: DEFAULT_RECORD_FONT_SIZE,
@@ -120,28 +119,52 @@ export const RECORD_PRESETS: Record<string, NonNullable<Config["record"]>> = {
       ],
     },
   },
-};
+} satisfies Record<string, ParsedRecordConfig>;
+export type RecordPreset = keyof typeof RECORD_PRESETS;
+export const DEFAULT_RECORD_PRESET: RecordPreset = "ttyl";
+
+interface ParsedRecordThemeConfig {
+  foreground?: string;
+  background?: string;
+  cursor?: string;
+  ansi?: string[];
+}
+
+interface ParsedRecordConfig {
+  preset?: RecordPreset;
+  output?: string;
+  size?: string;
+  fps?: number;
+  fontSize?: number;
+  fontFamily?: string;
+  cellWidth?: number;
+  cellHeight?: number;
+  paddingX?: number;
+  paddingY?: number;
+  theme?: ParsedRecordThemeConfig;
+}
 
 export function resolveRecordSettings(
   args: RecordCliArgs,
   config: Config,
   terminal: TerminalSizeSource,
 ): RecordSettings {
-  const record = readRecordConfig(config.record);
-  const configuredPreset = readString(record.preset, "record.preset");
-  const preset = readPresetName(args.preset || configuredPreset || DEFAULT_RECORD_PRESET);
+  const record = parseRecordConfig(config.record);
+  const preset = args.preset
+    ? readPresetName(args.preset, "--preset")
+    : record.preset ?? DEFAULT_RECORD_PRESET;
   const presetConfig = RECORD_PRESETS[preset];
   const mergedRecord = mergeRecordConfig(presetConfig, record);
   const fallbackSize = {
     cols: DEFAULT_STREAM_COLS,
     rows: DEFAULT_STREAM_ROWS,
   };
-  const configuredSize = readString(mergedRecord.size, "record.size");
+  const configuredSize = mergedRecord.size;
   const sizeText = args.size || configuredSize || "";
   const size = sizeText ? parseTerminalSize(sizeText) ?? fallbackSize : terminalSizeFromTty(terminal, fallbackSize);
   const fontSize = args.fontSize
     ? readPositiveInt(args.fontSize, DEFAULT_RECORD_FONT_SIZE, "--font-size", 120)
-    : readPositiveInt(mergedRecord.fontSize, DEFAULT_RECORD_FONT_SIZE, "record.fontSize", 120);
+    : mergedRecord.fontSize ?? DEFAULT_RECORD_FONT_SIZE;
   const cellWidth = readPositiveInt(
     mergedRecord.cellWidth,
     Math.max(1, Math.round(fontSize * 0.6)),
@@ -157,17 +180,17 @@ export function resolveRecordSettings(
 
   return {
     preset,
-    output: args.output || readString(mergedRecord.output, "record.output") || DEFAULT_RECORD_OUTPUT,
+    output: args.output || mergedRecord.output || DEFAULT_RECORD_OUTPUT,
     size,
     fps: args.fps
       ? readPositiveInt(args.fps, DEFAULT_RECORD_FPS, "--fps", 120)
-      : readPositiveInt(mergedRecord.fps, DEFAULT_RECORD_FPS, "record.fps", 120),
+      : mergedRecord.fps ?? DEFAULT_RECORD_FPS,
     fontSize,
     cellWidth,
     cellHeight,
     fontFamily:
       args.fontFamily ||
-      readString(mergedRecord.fontFamily, "record.fontFamily") ||
+      mergedRecord.fontFamily ||
       process.env.TTYL_RECORD_FONT?.trim() ||
       DEFAULT_RECORD_FONT_FAMILY,
     paddingX: readNonnegativeInt(mergedRecord.paddingX, 6, "record.paddingX", 200),
@@ -176,39 +199,64 @@ export function resolveRecordSettings(
   };
 }
 
-function readRecordConfig(input: unknown): NonNullable<Config["record"]> {
+function parseRecordConfig(input: unknown): ParsedRecordConfig {
   if (input === undefined) {
     return {};
   }
   if (!isObject(input)) {
     throw new Error("invalid record in config: expected an object");
   }
-  return input;
+  return {
+    preset: readOptionalPresetName(input.preset, "record.preset"),
+    output: readOptionalString(input.output, "record.output"),
+    size: readOptionalString(input.size, "record.size"),
+    fps: readOptionalPositiveInt(input.fps, "record.fps", 120),
+    fontSize: readOptionalPositiveInt(input.fontSize, "record.fontSize", 120),
+    fontFamily: readOptionalString(input.fontFamily, "record.fontFamily"),
+    cellWidth: readOptionalPositiveInt(input.cellWidth, "record.cellWidth", 200),
+    cellHeight: readOptionalPositiveInt(input.cellHeight, "record.cellHeight", 200),
+    paddingX: readOptionalNonnegativeInt(input.paddingX, "record.paddingX", 200),
+    paddingY: readOptionalNonnegativeInt(input.paddingY, "record.paddingY", 200),
+    theme: parseRecordThemeConfig(input.theme),
+  };
 }
 
-function readPresetName(input: string): string {
+function readOptionalPresetName(value: unknown, name: string): RecordPreset | undefined {
+  const input = readOptionalString(value, name);
+  return input ? readPresetName(input, name) : undefined;
+}
+
+function readPresetName(input: string, name: string): RecordPreset {
   const preset = input.trim() || DEFAULT_RECORD_PRESET;
   if (!(preset in RECORD_PRESETS)) {
-    throw new Error(`invalid --preset "${preset}": use one of ${Object.keys(RECORD_PRESETS).join(", ")}`);
+    throw new Error(`invalid ${name} "${preset}": use one of ${Object.keys(RECORD_PRESETS).join(", ")}`);
   }
-  return preset;
+  return preset as RecordPreset;
 }
 
 function mergeRecordConfig(
-  preset: NonNullable<Config["record"]>,
-  config: NonNullable<Config["record"]>,
-): NonNullable<Config["record"]> {
+  preset: ParsedRecordConfig,
+  config: ParsedRecordConfig,
+): ParsedRecordConfig {
   return {
-    ...preset,
-    ...config,
+    preset: config.preset ?? preset.preset,
+    output: config.output ?? preset.output,
+    size: config.size ?? preset.size,
+    fps: config.fps ?? preset.fps,
+    fontSize: config.fontSize ?? preset.fontSize,
+    fontFamily: config.fontFamily ?? preset.fontFamily,
+    cellWidth: config.cellWidth ?? preset.cellWidth,
+    cellHeight: config.cellHeight ?? preset.cellHeight,
+    paddingX: config.paddingX ?? preset.paddingX,
+    paddingY: config.paddingY ?? preset.paddingY,
     theme: mergeThemeConfig(preset.theme, config.theme),
   };
 }
 
 function mergeThemeConfig(
-  preset: NonNullable<Config["record"]>["theme"],
-  config: NonNullable<Config["record"]>["theme"],
-): NonNullable<Config["record"]>["theme"] {
+  preset: ParsedRecordThemeConfig | undefined,
+  config: ParsedRecordThemeConfig | undefined,
+): ParsedRecordThemeConfig | undefined {
   if (preset === undefined) {
     return config;
   }
@@ -216,21 +264,22 @@ function mergeThemeConfig(
     return preset;
   }
   return {
-    ...preset,
-    ...config,
+    foreground: config.foreground ?? preset.foreground,
+    background: config.background ?? preset.background,
+    cursor: config.cursor ?? preset.cursor,
     ansi: config.ansi ?? preset.ansi,
   };
 }
 
-function resolveRecordTheme(input: unknown): RecordTheme {
+function parseRecordThemeConfig(input: unknown): ParsedRecordThemeConfig | undefined {
   if (input === undefined) {
-    return DEFAULT_RECORD_THEME;
+    return undefined;
   }
   if (!isObject(input)) {
     throw new Error("invalid record.theme in config: expected an object");
   }
   const ansiValue = input.ansi;
-  let ansi = DEFAULT_RECORD_THEME.ansi;
+  let ansi: string[] | undefined;
   if (ansiValue !== undefined) {
     if (!Array.isArray(ansiValue) || ansiValue.length < 16) {
       throw new Error("invalid record.theme.ansi in config: expected at least 16 hex colors");
@@ -238,14 +287,26 @@ function resolveRecordTheme(input: unknown): RecordTheme {
     ansi = ansiValue.slice(0, 16).map((value, index) => readHexColor(value, `record.theme.ansi[${index}]`));
   }
   return {
-    foreground: readHexColor(input.foreground, "record.theme.foreground", DEFAULT_RECORD_THEME.foreground),
-    background: readHexColor(input.background, "record.theme.background", DEFAULT_RECORD_THEME.background),
-    cursor: readHexColor(input.cursor, "record.theme.cursor", DEFAULT_RECORD_THEME.cursor),
+    foreground: readOptionalHexColor(input.foreground, "record.theme.foreground"),
+    background: readOptionalHexColor(input.background, "record.theme.background"),
+    cursor: readOptionalHexColor(input.cursor, "record.theme.cursor"),
     ansi,
   };
 }
 
-function readString(value: unknown, name: string): string | undefined {
+function resolveRecordTheme(input: ParsedRecordThemeConfig | undefined): RecordTheme {
+  if (input === undefined) {
+    return DEFAULT_RECORD_THEME;
+  }
+  return {
+    foreground: input.foreground ?? DEFAULT_RECORD_THEME.foreground,
+    background: input.background ?? DEFAULT_RECORD_THEME.background,
+    cursor: input.cursor ?? DEFAULT_RECORD_THEME.cursor,
+    ansi: input.ansi ?? DEFAULT_RECORD_THEME.ansi,
+  };
+}
+
+function readOptionalString(value: unknown, name: string): string | undefined {
   if (value === undefined || value === null || value === "") {
     return undefined;
   }
@@ -256,38 +317,51 @@ function readString(value: unknown, name: string): string | undefined {
 }
 
 function readPositiveInt(value: unknown, fallback: number, name: string, max: number): number {
+  return readOptionalPositiveInt(value, name, max) ?? fallback;
+}
+
+function readOptionalPositiveInt(value: unknown, name: string, max: number): number | undefined {
   if (value === undefined || value === null || value === "") {
-    return fallback;
+    return undefined;
   }
   const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
   if (!Number.isInteger(parsed) || parsed <= 0 || parsed > max) {
-    throw new Error(`invalid ${name} in config: expected a positive integer up to ${max}`);
+    throw new Error(`invalid ${name}: expected a positive integer up to ${max}`);
   }
   return parsed;
 }
 
 function readNonnegativeInt(value: unknown, fallback: number, name: string, max: number): number {
+  return readOptionalNonnegativeInt(value, name, max) ?? fallback;
+}
+
+function readOptionalNonnegativeInt(value: unknown, name: string, max: number): number | undefined {
   if (value === undefined || value === null || value === "") {
-    return fallback;
+    return undefined;
   }
   const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
   if (!Number.isInteger(parsed) || parsed < 0 || parsed > max) {
-    throw new Error(`invalid ${name} in config: expected an integer from 0 to ${max}`);
+    throw new Error(`invalid ${name}: expected an integer from 0 to ${max}`);
   }
   return parsed;
 }
 
-function readHexColor(value: unknown, name: string, fallback?: string): string {
+function readOptionalHexColor(value: unknown, name: string): string | undefined {
   if (value === undefined || value === null || value === "") {
-    if (fallback !== undefined) {
-      return fallback;
-    }
-    throw new Error(`invalid ${name} in config: expected a #RRGGBB color`);
+    return undefined;
   }
   if (typeof value !== "string" || !/^#[0-9a-fA-F]{6}$/.test(value)) {
     throw new Error(`invalid ${name} in config: expected a #RRGGBB color`);
   }
   return value.toLowerCase();
+}
+
+function readHexColor(value: unknown, name: string): string {
+  const color = readOptionalHexColor(value, name);
+  if (color === undefined) {
+    throw new Error(`invalid ${name} in config: expected a #RRGGBB color`);
+  }
+  return color;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
