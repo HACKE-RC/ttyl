@@ -25,6 +25,29 @@ export interface TerminalSize {
   rows: number;
 }
 
+export interface TerminalSizeSource {
+  isTTY?: boolean;
+  columns?: number;
+  rows?: number;
+}
+
+export function terminalSizeFromTty(source: TerminalSizeSource, fallback: TerminalSize): TerminalSize {
+  const cols = source.columns ?? 0;
+  const rows = source.rows ?? 0;
+  if (
+    source.isTTY === true &&
+    Number.isInteger(cols) &&
+    Number.isInteger(rows) &&
+    cols >= MIN_STREAM_COLS &&
+    rows >= MIN_STREAM_ROWS &&
+    cols <= MAX_STREAM_COLS &&
+    rows <= MAX_STREAM_ROWS
+  ) {
+    return { cols, rows };
+  }
+  return fallback;
+}
+
 // parseLifetime turns a --lifetime value into a ttl for the relay:
 //   ""            -> undefined (omit ?ttl; the relay uses its default)
 //   never|none|0  -> 0 (never expire)

@@ -1,6 +1,6 @@
 {
   "name": "@rcx86/ttyl",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Share your terminal with a link: a live, interactive terminal-sharing relay and client. Deploy the relay to Cloudflare or run it yourself; stream with the ttyl CLI.",
   "type": "module",
   "bin": {
@@ -23,6 +23,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
+    "@xterm/headless": "^6.0.0",
     "node-pty": "^1.0.0",
     "ws": "^8.18.0"
   },

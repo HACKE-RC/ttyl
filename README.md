@@ -1,49 +1,146 @@
 # ttyl
 
-`ttyl` lets you stream your terminal session as a URL, with read-only or fully interactive access.
+Share a terminal as a browser URL, or record a local terminal command to MP4/WebM.
 
-## Features
+`ttyl` gives you:
 
-- **Live Terminal Streaming**: Viewers can see terminal output in real time directly in their browser.
-- **Interactive Access**: Support for both view-only and read-write sessions.
-- **Session Management**: Built-in web dashboard and CLI console to manage connected viewers (kick clients, lock sessions).
-- **Access Control**: Optional password protection for sessions.
-- **Privacy by Design**: Control keys are passed via URL fragments and never logged. Sessions expire automatically and terminal output is never written to disk.
-- **Flexible Deployment**: Run your own relay server via Node.js or deploy seamlessly to Cloudflare Workers.
+- live terminal streaming with read-only and read-write links
+- a browser viewer that keeps the source terminal grid stable
+- a small dashboard/admin console for managing viewers
+- optional password protection
+- local terminal recording without browser automation
+- self-hosted Node relay or Cloudflare Worker deployment
 
----
-
-## Installation
-
-Install the CLI globally via npm:
+## Install
 
 ```bash
 npm install -g @rcx86/ttyl
 ```
 
-This installs the `ttyl` executable, which provides the `stream`, `init`, `serve`, `admin`, `links`, and `stop` commands.
+This installs the `ttyl` CLI.
 
----
+## Quick Start
 
-## Relay Server Setup
-
-A relay server is required to bridge the terminal broadcaster and the web viewers. You can deploy it using either of the following methods.
-
-### Option A: Self-Hosted Node.js Server
-
-Run the relay locally or on your own infrastructure:
+Run a local relay:
 
 ```bash
-ttyl serve                              # Listens on http://0.0.0.0:8080
-ttyl serve --port 9000 --host 127.0.0.1 # Specify port and host
-PORT=9000 HOST=127.0.0.1 ttyl serve     # Configure via environment variables
+ttyl serve
 ```
 
-*Note: When deploying behind a reverse proxy handling TLS, set `TRUST_PROXY=1` so the rate-limiter accurately evaluates the `X-Forwarded-For` header.*
+In another terminal, save that relay as your default:
 
-### Option B: Cloudflare Worker
+```bash
+ttyl init --server http://localhost:8080
+```
 
-Deploy the relay to Cloudflare's edge network (requires a Cloudflare account):
+Start sharing your terminal:
+
+```bash
+ttyl stream
+```
+
+`ttyl stream` prints:
+
+- a read-write URL
+- a view-only URL
+- a dashboard URL
+
+## Streaming
+
+Start a normal interactive stream:
+
+```bash
+ttyl stream
+```
+
+Start a view-only stream:
+
+```bash
+ttyl stream --view-only
+```
+
+Add a password prompt:
+
+```bash
+ttyl stream --password
+```
+
+Pin the terminal grid instead of following your local terminal size:
+
+```bash
+ttyl stream --size 100x30
+```
+
+By default, the source terminal owns the PTY size. Browser viewers do not resize
+the command; they can switch between readable, fit, and 1:1 viewing modes.
+
+If you lose the URLs, print active session links from another terminal:
+
+```bash
+ttyl links
+```
+
+Stop a running stream:
+
+```bash
+ttyl stop
+ttyl stop <session-id>
+```
+
+## Recording
+
+Record a local command to MP4:
+
+```bash
+ttyl record --output demo.mp4 -- npm test
+```
+
+Record a shell session:
+
+```bash
+ttyl record --output demo.mp4 -- bash
+```
+
+Use a built-in preset:
+
+```bash
+ttyl record --preset presentation --output demo.mp4 -- npm test
+```
+
+Available presets:
+
+- `ttyl`: default ttyl viewer style
+- `presentation`: larger text and higher FPS
+- `compact`: smaller output
+- `classic`: plain black terminal style
+
+Recording uses your current terminal size by default. Pin the recorded grid when
+you need stable dimensions:
+
+```bash
+ttyl record --preset presentation --size 100x30 --output demo.mp4 -- npm test
+```
+
+Useful recording flags:
+
+```bash
+ttyl record --preset compact --fps 24 --font-size 14 --output demo.webm -- bash
+ttyl record --font-family "JetBrains Mono" --output demo.mp4 -- npm test
+```
+
+MP4 output uses `ffmpeg` with H.264. WebM output uses VP9.
+
+## Relay Deployment
+
+Run the relay with Node:
+
+```bash
+ttyl serve
+ttyl serve --port 9000 --host 127.0.0.1
+PORT=9000 HOST=127.0.0.1 ttyl serve
+```
+
+Deploy the relay to Cloudflare Workers:
 
 ```bash
 git clone https://github.com/rcx86/ttyl.git
@@ -53,147 +150,71 @@ npx wrangler login
 npm run deploy
 ```
 
-This deploys the relay to a `*.workers.dev` subdomain (e.g., `https://ttyl-relay.<your-subdomain>.workers.dev`).
+When running behind a TLS reverse proxy, set `TRUST_PROXY=1` so rate limiting
+uses `X-Forwarded-For` correctly.
 
----
+## Config
 
-## Usage
+`ttyl init --server <url>` writes the default relay URL to:
 
-### Initialization
-
-Configure the CLI with your relay server URL. This saves the configuration to the user's configuration directory (e.g., `~/.config/ttyl/config.json`) so it doesn't need to be passed with every command.
-
-```bash
-ttyl init --server <relay-url>
+```text
+~/.config/ttyl/config.json
 ```
 
-### Starting a Session
+You can also set recording defaults there:
 
-Start broadcasting the current terminal session:
-
-```bash
-ttyl stream
+```json
+{
+  "server": "http://localhost:8080",
+  "record": {
+    "preset": "presentation",
+    "output": "demo.mp4",
+    "size": "100x30",
+    "fps": 24,
+    "fontSize": 15,
+    "fontFamily": "JetBrains Mono"
+  }
+}
 ```
 
-There is one canonical PTY grid for the running command. By default the
-broadcaster's terminal owns that grid, so resizing your local terminal can resize
-the streamed command. Browser viewers do not resize the PTY. They render the
-source grid in a browser viewport with three modes:
+Command-line flags override config values for that run.
 
-- **Read**: default stable, readable cell size; pan if content is clipped.
-- **Fit**: scale the whole source grid into the browser.
-- **1:1**: render at the terminal's natural size.
+## Admin
 
-To pin a fixed canonical size for everyone instead (no window tracking):
-
-```bash
-ttyl stream --size 100x30
-```
-
-`--follow-terminal-size` makes the window tracking explicit; it is the default
-when streaming from a real terminal. Browser viewport size never feeds back into
-the PTY.
-
-By default, this generates three URLs:
-- **Read-Write**: Grants viewers the ability to watch and type.
-- **View-Only**: Grants viewers watch-only access.
-- **Dashboard**: Owner-only interface for managing the session.
-
-To create a strictly view-only session (where no interactive link is generated):
-
-```bash
-ttyl stream --view-only
-```
-
-### Session Lifetime
-
-Sessions terminate immediately upon shell exit. They also enforce a maximum lifetime duration (default: 8 hours). To specify a custom lifetime:
-
-```bash
-ttyl stream --lifetime 2d       # Accepts formats like 30m, 6h, 8h, 2d, 1d12h
-ttyl stream --lifetime never    # Disables automatic expiration
-```
-
-### Stopping a Session
-
-A session normally ends when its shell exits. To stop a running stream without touching its terminal, open a separate terminal on the same machine and run:
-
-```bash
-ttyl stop                # Stops the session if exactly one is running
-ttyl stop <session-id>   # Required when several sessions are running
-```
-
-If multiple sessions are running, `ttyl stop` lists them with their ids so you can choose which to stop.
-
-A session can also be ended remotely from the dashboard ("End session") or the admin console (the `end` command), which stops the stream for the owner and all viewers.
-
----
-
-## Session Management & Security
-
-`ttyl` sessions include an optional management layer for access control and administration.
-
-### Dashboard & Admin Console
-
-The `dashboard:` URL provides an interface to view connected clients, kick viewers, lock the session to prevent new joins, and manage passwords.
-
-To access the management console from the CLI instead of the web:
+Open the dashboard URL in a browser, or use the CLI admin console:
 
 ```bash
 ttyl admin '<dashboard-url>'
-# or manually passing the components:
-ttyl admin --id <id> --key <admin-key> --server <relay-url>
 ```
 
-Available CLI commands within the admin console: `kick <#>`, `lock`, `unlock`, `password <value>`, `password clear`, `quit`.
-
-### Password Protection
-
-To require a password for all viewers (both view-only and read-write), initialize the stream with the `--password` flag. You will be prompted to enter the password interactively to prevent it from appearing in shell history:
-
-```bash
-ttyl stream --password
-```
-
-Passwords can also be set, updated, or removed dynamically via the dashboard or admin console. 
-
-*Note: `ttyl` does not utilize user accounts. If a session password is forgotten, there is no email reset flow. Password recovery is performed by clearing or resetting the password via the authenticated dashboard or admin console.*
-
-### Link Recovery
-
-Stream URLs are printed only once upon startup. To retrieve active session links later, open a separate terminal on the same machine and run:
-
-```bash
-ttyl links
-```
-
-This queries the running session via a local IPC socket to reprint the URLs securely without writing secrets to disk.
-
----
-
-## Configuration Reference
-
-| Parameter | Configuration Method | Default |
-| --- | --- | --- |
-| Session lifetime (client) | `ttyl stream --lifetime <duration>` | Relay default |
-| Session lifetime (server) | `SESSION_TTL_SECONDS` env var / `wrangler.toml` | 8 hours (28800) |
-| Session password | `ttyl stream --password` or Dashboard | None |
-| Dashboard / kick / lock | `dashboard:` link, or `ttyl admin <link>` | Per session |
-| Sessions per IP | `ratelimits` in `wrangler.toml` (Worker) | 20 / minute |
-| Server bind address | `--port`/`--host` flags or `PORT`/`HOST` env var | `0.0.0.0:8080` |
-| Proxy trust | `TRUST_PROXY=1` env var | Off |
-| Worker hostname | `name` in `wrangler.toml` | `ttyl-relay` |
-
----
+Admin commands include `kick`, `lock`, `unlock`, `password`, `password clear`,
+and `quit`.
 
 ## Development
 
 ```bash
-npm run dev            # Run Cloudflare Worker locally
-npm run dev:node       # Run Node server locally with auto-reload
-npm test               # Run unit tests
-npm run typecheck      # Type-check all targets
+npm install
+npm run dev            # Cloudflare Worker dev server
+npm run dev:node       # Node relay with auto-reload
+npm test
+npm run typecheck
+```
 
-# Run end-to-end tests against a running relay:
+Run end-to-end tests against a running relay:
+
+```bash
 node test/e2e.mjs http://127.0.0.1:8787
 ```
+
+## Release
+
+npm publishing is tag-driven. Bump `package.json`, commit the change, then push
+a matching tag:
+
+```bash
+git tag v0.1.5
+git push origin HEAD v0.1.5
+```
+
+The GitHub workflow checks that the tag matches `package.json` before publishing
+to npm. A version bump without the tag does not publish.
