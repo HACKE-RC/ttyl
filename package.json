@@ -3,6 +3,10 @@
   "version": "0.1.5",
   "description": "Share your terminal with a link: a live, interactive terminal-sharing relay and client. Deploy the relay to Cloudflare or run it yourself; stream with the ttyl CLI.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HACKE-RC/ttyl"
+  },
   "bin": {
     "ttyl": "dist/cli.js"
   },
