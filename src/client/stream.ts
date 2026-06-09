@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { WebSocket } from "ws";
 import { decode, encode, Kind } from "../core/wire";
 import { encodeAuthPayload } from "../core/auth";
+import { createTtylVaultWriter, resolveTtylVaultSettings, type TtylVaultCliArgs } from "./ttylvault";
 import {
   DEFAULT_STREAM_COLS,
   DEFAULT_STREAM_ROWS,
@@ -20,7 +21,7 @@ import {
 } from "./util";
 import { startControlServer } from "./control";
 
-export interface StreamArgs {
+export interface StreamArgs extends TtylVaultCliArgs {
   server: string;
   viewOnly: boolean;
   lifetime: string;
@@ -80,6 +81,19 @@ export async function runStream(args: StreamArgs): Promise<void> {
   let cols = followWindow ? process.stdout.columns || fixedSize.cols : fixedSize.cols;
   let rows = followWindow ? process.stdout.rows || fixedSize.rows : fixedSize.rows;
   const command = args.command.length > 0 ? args.command : [process.env.SHELL || "/bin/sh"];
+  const vaultSettings = resolveTtylVaultSettings(args, "ttyl-stream");
+  const vault = await createTtylVaultWriter(vaultSettings, {
+    command,
+    cwd: process.cwd(),
+    outputVideo: "",
+    terminal: { cols, rows },
+    recording: {
+      preset: "stream",
+      fps: 0,
+      fontSize: 0,
+      fontFamily: "",
+    },
+  });
 
   // Publish the links on a local control socket so `ttyl links` can reprint them
   // later. Best-effort: if it fails, the stream still runs (just no recovery).
@@ -132,12 +146,14 @@ export async function runStream(args: StreamArgs): Promise<void> {
       // ignore transient resize errors
     }
     publishResize();
+    vault.writeResize(cols, rows);
   }
 
   // Broadcast the initial size before any output.
   publishResize();
 
   let closed = false;
+  let vaultFinished = false;
   const cleanup = (code: number): void => {
     if (closed) {
       return;
@@ -162,14 +178,27 @@ export async function runStream(args: StreamArgs): Promise<void> {
       // ignore
     }
     void stopControl(); // remove the local control socket (best effort)
-    // Give the final output a moment to flush to stdout and over the socket.
-    setTimeout(() => process.exit(code), 50);
+    void (async () => {
+      await vault.finish(code);
+      vaultFinished = true;
+      if (vault.enabled) {
+        process.stderr.write(`ttyl: vaulted ${vault.dir}\n`);
+      }
+      // Give the final output a moment to flush to stdout and over the socket.
+      setTimeout(() => process.exit(code), 50);
+    })().catch(() => {
+      if (!vaultFinished) {
+        void vault.abort();
+      }
+      setTimeout(() => process.exit(code), 50);
+    });
   };
 
   // PTY output: mirror locally and broadcast (raw bytes).
   term.onData((chunk: string | Buffer) => {
     const buf = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
     process.stdout.write(buf);
+    vault.writeData(buf);
     if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < SEND_BUFFER_CAP) {
       // The Uint8Array is a view over node-pty's (possibly pooled) Buffer; this
       // is safe only because encode() copies the bytes synchronously before the

@@ -20,10 +20,20 @@ import {
   VIEWER_PATH,
   WS_PATH,
 } from "../core/http";
+import {
+  MAX_VAULT_UPLOAD_BYTES,
+  validateVaultPayload,
+  vaultPayloadSize,
+  VAULT_API_ITEM_PATH,
+  VAULT_VIEW_PATH,
+  type VaultPayload,
+} from "../core/vault";
 import indexHtml from "../../web/index.html";
 import adminHtml from "../../web/admin.html";
+import vaultHtml from "../../web/vault.html";
 import viewerJs from "../../web/viewer.client.txt";
 import adminJs from "../../web/admin.client.txt";
+import vaultJs from "../../web/vault.client.txt";
 import xtermJs from "../../web/vendor/xterm.lib.txt";
 import xtermCss from "../../web/vendor/xterm.style.txt";
 
@@ -36,9 +46,12 @@ const KEY_LOCKED = "locked";
 const KEY_PWHASH = "pwhash";
 const KEY_PWSALT = "pwsalt";
 const KEY_PWITER = "pwiter";
+const KEY_VAULT_PAYLOAD = "payload";
+const KEY_VAULT_EXPIRES = "expires";
 
 export interface Env {
   SESSION: DurableObjectNamespace<SessionRelay>;
+  VAULT: DurableObjectNamespace<VaultArchive>;
   SESSION_LIMITER?: RateLimit;
   SESSION_TTL_SECONDS?: string;
 }
@@ -297,6 +310,49 @@ export class SessionRelay extends DurableObject<Env> {
   }
 }
 
+export class VaultArchive extends DurableObject<Env> {
+  async create(payload: VaultPayload, expiresAt: number | null): Promise<void> {
+    const existing = await this.ctx.storage.get(KEY_VAULT_PAYLOAD);
+    if (existing !== undefined) {
+      return;
+    }
+    await this.ctx.storage.put(KEY_VAULT_PAYLOAD, payload);
+    await this.ctx.storage.put(KEY_VAULT_EXPIRES, expiresAt);
+    if (expiresAt !== null) {
+      await this.ctx.storage.setAlarm(expiresAt);
+    }
+  }
+
+  async exists(): Promise<boolean> {
+    const payload = await this.ctx.storage.get<VaultPayload>(KEY_VAULT_PAYLOAD);
+    if (!payload) {
+      return false;
+    }
+    const expiresAt = await this.ctx.storage.get<number | null>(KEY_VAULT_EXPIRES);
+    if (expiresAt !== null && expiresAt !== undefined && Date.now() > expiresAt) {
+      await this.clear();
+      return false;
+    }
+    return true;
+  }
+
+  async read(): Promise<VaultPayload | null> {
+    if (!(await this.exists())) {
+      return null;
+    }
+    return (await this.ctx.storage.get<VaultPayload>(KEY_VAULT_PAYLOAD)) ?? null;
+  }
+
+  override async alarm(): Promise<void> {
+    await this.clear();
+  }
+
+  private async clear(): Promise<void> {
+    await this.ctx.storage.delete([KEY_VAULT_PAYLOAD, KEY_VAULT_EXPIRES]);
+    await this.ctx.storage.deleteAlarm();
+  }
+}
+
 function secured(body: BodyInit | null, contentType: string, status = 200): Response {
   return new Response(body, { status, headers: securityHeaders(contentType) });
 }
@@ -308,6 +364,10 @@ export default {
 
     if (request.method === "POST" && path === "/api/sessions") {
       return createSession(request, env);
+    }
+
+    if (request.method === "POST" && path === "/api/vaults") {
+      return createVault(request, env);
     }
 
     if (request.method === "GET") {
@@ -322,6 +382,9 @@ export default {
       }
       if (path === "/static/admin.js") {
         return secured(adminJs, CONTENT_TYPE.js);
+      }
+      if (path === "/static/vault.js") {
+        return secured(vaultJs, CONTENT_TYPE.js);
       }
       if (path === "/static/xterm.js") {
         return secured(xtermJs, CONTENT_TYPE.js);
@@ -338,6 +401,16 @@ export default {
       const adminMatch = path.match(ADMIN_PATH);
       if (adminMatch) {
         return sessionPage(env, adminMatch[1], adminHtml);
+      }
+
+      const vaultMatch = path.match(VAULT_VIEW_PATH);
+      if (vaultMatch) {
+        return vaultPage(env, vaultMatch[1]);
+      }
+
+      const vaultApiMatch = path.match(VAULT_API_ITEM_PATH);
+      if (vaultApiMatch) {
+        return vaultJson(env, vaultApiMatch[1]);
       }
 
       const wsMatch = path.match(WS_PATH);
@@ -376,6 +449,44 @@ async function createSession(request: Request, env: Env): Promise<Response> {
   });
 }
 
+async function createVault(request: Request, env: Env): Promise<Response> {
+  if (env.SESSION_LIMITER) {
+    const ip = request.headers.get("CF-Connecting-IP") ?? "anon";
+    const { success } = await env.SESSION_LIMITER.limit({ key: `vault:${ip}` });
+    if (!success) {
+      return secured("rate limit exceeded", CONTENT_TYPE.text, 429);
+    }
+  }
+  const text = await request.text();
+  if (new TextEncoder().encode(text).byteLength > MAX_VAULT_UPLOAD_BYTES) {
+    return secured("vault too large", CONTENT_TYPE.text, 413);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return secured("invalid vault json", CONTENT_TYPE.text, 400);
+  }
+  const payload = validateVaultPayload(parsed);
+  if (!payload || vaultPayloadSize(payload) > MAX_VAULT_UPLOAD_BYTES) {
+    return secured("invalid vault payload", CONTENT_TYPE.text, 400);
+  }
+
+  const id = newSessionID();
+  const ttl = resolveTtlSeconds(parseTtlParam(new URL(request.url).searchParams.get("ttl")), env.SESSION_TTL_SECONDS);
+  const expiresAt = ttl <= 0 ? null : Date.now() + ttl * 1000;
+  const stub = env.VAULT.get(env.VAULT.idFromName(id));
+  await stub.create(payload, expiresAt);
+  const link = `${new URL(request.url).origin}/v/${id}`;
+  return new Response(JSON.stringify({ id, link, expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null }), {
+    headers: {
+      "Content-Type": CONTENT_TYPE.json,
+      "Referrer-Policy": "no-referrer",
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
 // readInitialPassword pulls an optional { password } from the JSON body, if any.
 // A missing/invalid body just means no password (the common case).
 async function readInitialPassword(request: Request): Promise<string | undefined> {
@@ -393,6 +504,23 @@ async function sessionPage(env: Env, id: string, html: string): Promise<Response
     return secured("session not found", CONTENT_TYPE.text, 404);
   }
   return secured(html, CONTENT_TYPE.html);
+}
+
+async function vaultPage(env: Env, id: string): Promise<Response> {
+  const stub = env.VAULT.get(env.VAULT.idFromName(id));
+  if (!(await stub.exists())) {
+    return secured("vault not found", CONTENT_TYPE.text, 404);
+  }
+  return secured(vaultHtml, CONTENT_TYPE.html);
+}
+
+async function vaultJson(env: Env, id: string): Promise<Response> {
+  const stub = env.VAULT.get(env.VAULT.idFromName(id));
+  const payload = await stub.read();
+  if (!payload) {
+    return secured("vault not found", CONTENT_TYPE.text, 404);
+  }
+  return secured(JSON.stringify(payload), CONTENT_TYPE.json);
 }
 
 async function websocket(env: Env, request: Request, id: string): Promise<Response> {

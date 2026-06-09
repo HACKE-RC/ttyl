@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ttylvault</title>
+    <link rel="stylesheet" href="/static/xterm.css" />
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #090b10;
+        --panel: #11141c;
+        --line: #252a36;
+        --text: #d8deef;
+        --muted: #8b93a7;
+        --accent: #7aa2f7;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+      }
+      h1 {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 650;
+      }
+      .meta {
+        min-width: 0;
+        color: var(--muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .controls {
+        margin-left: auto;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      button,
+      select {
+        border: 1px solid var(--line);
+        background: #171b25;
+        color: var(--text);
+        border-radius: 6px;
+        padding: 6px 9px;
+        font: inherit;
+      }
+      button:hover,
+      select:hover {
+        border-color: var(--accent);
+      }
+      main {
+        display: grid;
+        grid-template-rows: minmax(0, 1fr) auto;
+        min-height: calc(100vh - 54px);
+      }
+      #terminal {
+        min-height: 0;
+        padding: 12px;
+      }
+      footer {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 12px;
+        padding: 10px 16px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        background: var(--panel);
+      }
+      #status {
+        white-space: nowrap;
+      }
+      @media (max-width: 760px) {
+        header {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+        .controls {
+          margin-left: 0;
+        }
+        footer {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>ttylvault</h1>
+      <div class="meta" id="meta"></div>
+      <div class="controls">
+        <button id="play" type="button">Pause</button>
+        <button id="restart" type="button">Restart</button>
+        <select id="speed" aria-label="Replay speed">
+          <option value="0.5">0.5x</option>
+          <option value="1" selected>1x</option>
+          <option value="2">2x</option>
+          <option value="5">5x</option>
+          <option value="20">20x</option>
+        </select>
+        <button id="copy" type="button">Copy Transcript</button>
+      </div>
+    </header>
+    <main>
+      <div id="terminal"></div>
+      <footer>
+        <div id="command"></div>
+        <div id="status"></div>
+      </footer>
+    </main>
+    <script src="/static/xterm.js"></script>
+    <script src="/static/vault.js"></script>
+  </body>
+</html>

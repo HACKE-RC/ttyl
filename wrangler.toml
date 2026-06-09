@@ -35,7 +35,15 @@ namespace_id = "1001"
 name = "SESSION"
 class_name = "SessionRelay"
 
+[[durable_objects.bindings]]
+name = "VAULT"
+class_name = "VaultArchive"
+
 # SQLite-backed Durable Objects are required on the Workers Free plan.
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["SessionRelay"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["VaultArchive"]

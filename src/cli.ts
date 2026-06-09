@@ -9,6 +9,7 @@ const USAGE = `ttyl - share your terminal with a link
 Commands:
   stream   Wrap a shell in a PTY and stream it to a relay
   record   Record a local terminal command to MP4/WebM
+  vault    Inspect, replay, export, and share ttylvault archives
   links    Reprint the links for streams running on this machine
   stop     Stop a stream running on this machine
   admin    Open the management console for a running session
@@ -16,8 +17,9 @@ Commands:
   serve    Run a relay server (Node)
 
 Flags:
-  stream [--server <url>] [--view-only] [--password] [--lifetime <30m|8h|2d|never>] [--size <80x24>] [--follow-terminal-size] [-- command...]
-  record [--preset <name>] [--output <file>] [--size <COLSxROWS>] [--fps <n>] [--font-size <px>] [--font-family <name>] [-- command...]
+  stream [--server <url>] [--view-only] [--password] [--lifetime <30m|8h|2d|never>] [--size <80x24>] [--follow-terminal-size] [--vault] [--vault-output <dir>] [-- command...]
+  record [--preset <name>] [--output <file>] [--size <COLSxROWS>] [--fps <n>] [--font-size <px>] [--font-family <name>] [--vault] [--vault-output <dir>] [-- command...]
+  vault  <list|info|search|replay|export|share> ...
   stop   [<session-id>]
   admin  [<dashboard-link>] [--server <url>] [--id <id>] [--key <admin-key>]
   init   [--server <url>]
@@ -38,6 +40,8 @@ async function main(): Promise<void> {
         lifetime: flagValue(flags, "-lifetime", "--lifetime") ?? "",
         size: flagValue(flags, "-size", "--size") ?? "",
         followTerminalSize: flagBool(flags, "-follow-terminal-size", "--follow-terminal-size"),
+        vault: flagBool(flags, "-vault", "--vault"),
+        vaultOutput: flagValue(flags, "-vault-output", "--vault-output") ?? "",
         command,
       });
       return;
@@ -56,8 +60,15 @@ async function main(): Promise<void> {
         fps: flagValue(flags, "-fps", "--fps") ?? "",
         fontSize: flagValue(flags, "-font-size", "--font-size") ?? "",
         fontFamily: flagValue(flags, "-font-family", "--font-family") ?? "",
+        vault: flagBool(flags, "-vault", "--vault"),
+        vaultOutput: flagValue(flags, "-vault-output", "--vault-output") ?? "",
         command,
       });
+      return;
+    }
+    case "vault": {
+      const { runTtylVaultCli } = await import("./client/ttylvault-cli");
+      await runTtylVaultCli(rest);
       return;
     }
     case "links": {

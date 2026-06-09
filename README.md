@@ -130,6 +130,35 @@ ttyl record --font-family "JetBrains Mono" --output demo.mp4 -- npm test
 
 MP4 output uses `ffmpeg` with H.264. WebM output uses VP9.
 
+Ttylvault archives contain the recording manifest, raw PTY event log, and
+searchable transcript:
+
+```bash
+ttyl record --vault --output demo.mp4 -- npm test
+```
+
+Archive a live stream:
+
+```bash
+ttyl stream --vault
+```
+
+Vault commands:
+
+```bash
+ttyl vault list
+ttyl vault info <vault-id-or-path>
+ttyl vault search "failed"
+ttyl vault replay <vault-id-or-path> --speed 2
+ttyl vault export <vault-id-or-path> --format asciicast --output demo.cast
+```
+
+Share a vault through a relay:
+
+```bash
+ttyl vault share <vault-id-or-path> --server https://relay.example --lifetime 8h
+```
+
 ## Relay Deployment
 
 Run the relay with Node:

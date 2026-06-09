@@ -8,14 +8,28 @@ import { createVideoEncoder, estimateSvgFramePacketSize } from "./record-encoder
 import { attachLocalInput } from "./record-input";
 import { createRenderOptions, renderTerminalSvg, terminalSvgSize } from "./record-renderer";
 import { type RecordCliArgs, resolveRecordSettings } from "./record-settings";
+import { createTtylVaultWriter, resolveTtylVaultSettings, type TtylVaultCliArgs } from "./ttylvault";
 
-export type RecordArgs = RecordCliArgs;
+export type RecordArgs = RecordCliArgs & TtylVaultCliArgs;
 
 export async function runRecord(args: RecordArgs): Promise<void> {
   const settings = resolveRecordSettings(args, await load(), process.stdout);
   const { size, fps } = settings;
   const command = args.command.length > 0 ? args.command : [process.env.SHELL || "/bin/sh"];
   const output = resolve(settings.output);
+  const vaultSettings = resolveTtylVaultSettings(args, output);
+  const vault = await createTtylVaultWriter(vaultSettings, {
+    command,
+    cwd: process.cwd(),
+    outputVideo: output,
+    terminal: settings.size,
+    recording: {
+      preset: settings.preset,
+      fps: settings.fps,
+      fontSize: settings.fontSize,
+      fontFamily: settings.fontFamily,
+    },
+  });
   const renderOptions = createRenderOptions(settings);
   const encoder = createVideoEncoder({
     output,
@@ -46,6 +60,7 @@ export async function runRecord(args: RecordArgs): Promise<void> {
   let stopped = false;
   let exitCode = 0;
   let encoderFinished = false;
+  let vaultFinished = false;
   let writeChain = Promise.resolve();
   let renderActive: Promise<void> | undefined;
   let renderQueued = false;
@@ -104,6 +119,7 @@ export async function runRecord(args: RecordArgs): Promise<void> {
   child.onData((chunk: string | Buffer) => {
     const buf = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
     process.stdout.write(buf);
+    vault.writeData(buf);
     const bytes = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
     writeChain = writeChain.then(() => writeTerminal(terminal, bytes));
   });
@@ -133,7 +149,12 @@ export async function runRecord(args: RecordArgs): Promise<void> {
     await renderFrame();
     await encoder.finish();
     encoderFinished = true;
+    await vault.finish(exitCode);
+    vaultFinished = true;
     process.stderr.write(`ttyl: recorded ${output}\n`);
+    if (vault.enabled) {
+      process.stderr.write(`ttyl: vaulted ${vault.dir}\n`);
+    }
     process.exitCode = exitCode;
   } finally {
     stopped = true;
@@ -143,6 +164,9 @@ export async function runRecord(args: RecordArgs): Promise<void> {
     terminal.dispose();
     if (!encoderFinished) {
       encoder.abort();
+    }
+    if (!vaultFinished) {
+      await vault.abort();
     }
   }
 }

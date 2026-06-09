@@ -20,11 +20,21 @@ import {
   VIEWER_PATH,
   WS_PATH,
 } from "../core/http";
+import {
+  MAX_VAULT_UPLOAD_BYTES,
+  validateVaultPayload,
+  vaultPayloadSize,
+  VAULT_API_ITEM_PATH,
+  VAULT_VIEW_PATH,
+  type VaultPayload,
+} from "../core/vault";
 import { flagValue } from "../args";
 import indexHtml from "../../web/index.html";
 import adminHtml from "../../web/admin.html";
+import vaultHtml from "../../web/vault.html";
 import viewerJs from "../../web/viewer.client.txt";
 import adminJs from "../../web/admin.client.txt";
+import vaultJs from "../../web/vault.client.txt";
 import xtermJs from "../../web/vendor/xterm.lib.txt";
 import xtermCss from "../../web/vendor/xterm.style.txt";
 
@@ -43,8 +53,10 @@ const MAX_BODY_BYTES = 4 * 1024;
 const ASSETS = {
   index: indexHtml,
   admin: adminHtml,
+  vault: vaultHtml,
   viewer: viewerJs,
   adminJs,
+  vaultJs,
   xtermJs,
   xtermCss,
 };
@@ -55,7 +67,14 @@ interface Session {
   graceTimer: ReturnType<typeof setTimeout> | null;
 }
 
+interface VaultRecord {
+  payload: VaultPayload;
+  expiresAt: number | null;
+  ttlTimer: ReturnType<typeof setTimeout> | null;
+}
+
 const sessions = new Map<string, Session>();
+const vaults = new Map<string, VaultRecord>();
 const rateHits = new Map<string, number[]>();
 
 function clientIp(req: IncomingMessage): string {
@@ -156,17 +175,20 @@ function live(id: string): Session | undefined {
 
 // readBody collects a bounded request body, returning "" if it is missing or
 // over the cap.
-function readBody(req: IncomingMessage): Promise<string> {
+function readBody(req: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<string> {
   return new Promise((resolve) => {
     let data = "";
+    let bytes = 0;
     let over = false;
     req.on("data", (chunk: Buffer) => {
       if (over) return;
-      data += chunk.toString("utf8");
-      if (data.length > MAX_BODY_BYTES) {
+      bytes += chunk.byteLength;
+      if (bytes > maxBytes) {
         over = true;
         data = "";
+        return;
       }
+      data += chunk.toString("utf8");
     });
     req.on("end", () => resolve(data));
     req.on("error", () => resolve(""));
@@ -208,6 +230,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     return;
   }
 
+  if (method === "POST" && path === "/api/vaults") {
+    return createVault(req, res, url);
+  }
+
   if (method === "GET") {
     if (path === "/") {
       return secured(
@@ -222,6 +248,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     }
     if (path === "/static/admin.js") {
       return secured(res, 200, CONTENT_TYPE.js, ASSETS.adminJs);
+    }
+    if (path === "/static/vault.js") {
+      return secured(res, 200, CONTENT_TYPE.js, ASSETS.vaultJs);
     }
     if (path === "/static/xterm.js") {
       return secured(res, 200, CONTENT_TYPE.js, ASSETS.xtermJs);
@@ -243,9 +272,81 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       }
       return secured(res, 200, CONTENT_TYPE.html, ASSETS.admin);
     }
+    const vaultMatch = path.match(VAULT_VIEW_PATH);
+    if (vaultMatch) {
+      if (!liveVault(vaultMatch[1])) {
+        return secured(res, 404, CONTENT_TYPE.text, "vault not found");
+      }
+      return secured(res, 200, CONTENT_TYPE.html, ASSETS.vault);
+    }
+    const vaultApiMatch = path.match(VAULT_API_ITEM_PATH);
+    if (vaultApiMatch) {
+      const record = liveVault(vaultApiMatch[1]);
+      if (!record) {
+        return secured(res, 404, CONTENT_TYPE.text, "vault not found");
+      }
+      return secured(res, 200, CONTENT_TYPE.json, JSON.stringify(record.payload));
+    }
   }
 
   return secured(res, 404, CONTENT_TYPE.text, "not found");
+}
+
+async function createVault(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  if (!allow(clientIp(req))) {
+    return secured(res, 429, CONTENT_TYPE.text, "rate limit exceeded");
+  }
+  const body = await readBody(req, MAX_VAULT_UPLOAD_BYTES + 1);
+  if (body === "") {
+    return secured(res, 400, CONTENT_TYPE.text, "empty or oversized vault");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return secured(res, 400, CONTENT_TYPE.text, "invalid vault json");
+  }
+  const payload = validateVaultPayload(parsed);
+  if (!payload || vaultPayloadSize(payload) > MAX_VAULT_UPLOAD_BYTES) {
+    return secured(res, 400, CONTENT_TYPE.text, "invalid vault payload");
+  }
+  const id = newSessionID();
+  const ttl = resolveTtlSeconds(parseTtlParam(url.searchParams.get("ttl")), process.env.SESSION_TTL_SECONDS);
+  const expiresAt = ttl <= 0 ? null : Date.now() + ttl * 1000;
+  const ttlTimer = expiresAt === null ? null : setTimeout(() => vaults.delete(id), ttl * 1000);
+  vaults.set(id, { payload, expiresAt, ttlTimer });
+  const response = {
+    id,
+    link: `${requestOrigin(req)}/v/${id}`,
+    expiresAt: expiresAt === null ? null : new Date(expiresAt).toISOString(),
+  };
+  res.writeHead(200, {
+    "Content-Type": CONTENT_TYPE.json,
+    "Referrer-Policy": "no-referrer",
+    "Cache-Control": "no-store",
+  });
+  res.end(JSON.stringify(response));
+}
+
+function liveVault(id: string): VaultRecord | undefined {
+  const record = vaults.get(id);
+  if (!record) {
+    return undefined;
+  }
+  if (record.expiresAt !== null && Date.now() > record.expiresAt) {
+    if (record.ttlTimer) clearTimeout(record.ttlTimer);
+    vaults.delete(id);
+    return undefined;
+  }
+  return record;
+}
+
+function requestOrigin(req: IncomingMessage): string {
+  const proto =
+    TRUST_PROXY && typeof req.headers["x-forwarded-proto"] === "string"
+      ? req.headers["x-forwarded-proto"].split(",")[0].trim()
+      : "http";
+  return `${proto}://${req.headers.host ?? "localhost"}`;
 }
 
 function bridge(ws: WebSocket, relay: Relay, role: Role, meta: ConnMeta): void {

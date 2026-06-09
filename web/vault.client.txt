@@ -1,0 +1,136 @@
+(function () {
+  "use strict";
+
+  var id = location.pathname.split("/").filter(Boolean).pop();
+  var terminalEl = document.getElementById("terminal");
+  var metaEl = document.getElementById("meta");
+  var commandEl = document.getElementById("command");
+  var statusEl = document.getElementById("status");
+  var playEl = document.getElementById("play");
+  var restartEl = document.getElementById("restart");
+  var speedEl = document.getElementById("speed");
+  var copyEl = document.getElementById("copy");
+
+  var archive = null;
+  var term = null;
+  var index = 0;
+  var playing = true;
+  var timer = 0;
+
+  function setStatus(text) {
+    statusEl.textContent = text;
+  }
+
+  function decodeBase64(value) {
+    var raw = atob(value);
+    var bytes = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) {
+      bytes[i] = raw.charCodeAt(i);
+    }
+    return bytes;
+  }
+
+  function bootTerminal() {
+    if (term) {
+      term.dispose();
+    }
+    term = new Terminal({
+      cols: archive.manifest.terminal.cols,
+      rows: archive.manifest.terminal.rows,
+      convertEol: false,
+      cursorBlink: false,
+      theme: {
+        background: "#0b0e14",
+        foreground: "#c8d3f5",
+      },
+    });
+    terminalEl.textContent = "";
+    term.open(terminalEl);
+  }
+
+  function renderMeta() {
+    var manifest = archive.manifest;
+    var seconds = Math.max(0, Math.round(manifest.stats.durationMs / 1000));
+    metaEl.textContent = manifest.id + " / " + manifest.status + " / " + seconds + "s";
+    commandEl.textContent = manifest.command.join(" ");
+  }
+
+  function scheduleNext(previousElapsed) {
+    clearTimeout(timer);
+    if (!playing) {
+      return;
+    }
+    var events = archive.events;
+    if (index >= events.length) {
+      setStatus("done");
+      playEl.textContent = "Play";
+      playing = false;
+      return;
+    }
+    var speed = Number(speedEl.value) || 1;
+    var event = events[index];
+    var delay = Math.max(0, event.elapsedMs - previousElapsed) / speed;
+    timer = window.setTimeout(function () {
+      if (event.type === "data") {
+        term.write(decodeBase64(event.data));
+      } else if (event.type === "resize") {
+        term.resize(event.cols, event.rows);
+      }
+      index++;
+      setStatus(index + "/" + events.length);
+      scheduleNext(event.elapsedMs);
+    }, delay);
+  }
+
+  function restart() {
+    index = 0;
+    playing = true;
+    playEl.textContent = "Pause";
+    bootTerminal();
+    scheduleNext(0);
+  }
+
+  playEl.addEventListener("click", function () {
+    playing = !playing;
+    playEl.textContent = playing ? "Pause" : "Play";
+    if (playing) {
+      var events = archive.events;
+      var previous = index > 0 && events[index - 1] ? events[index - 1].elapsedMs : 0;
+      scheduleNext(previous);
+    } else {
+      clearTimeout(timer);
+    }
+  });
+
+  restartEl.addEventListener("click", restart);
+  speedEl.addEventListener("change", function () {
+    if (playing) {
+      var events = archive.events;
+      var previous = index > 0 && events[index - 1] ? events[index - 1].elapsedMs : 0;
+      scheduleNext(previous);
+    }
+  });
+  copyEl.addEventListener("click", function () {
+    navigator.clipboard.writeText(archive.transcript).then(function () {
+      setStatus("copied");
+    });
+  });
+
+  fetch("/api/vaults/" + encodeURIComponent(id), { cache: "no-store" })
+    .then(function (response) {
+      if (!response.ok) {
+        throw new Error("vault not found");
+      }
+      return response.json();
+    })
+    .then(function (payload) {
+      archive = payload;
+      bootTerminal();
+      renderMeta();
+      setStatus("loading");
+      scheduleNext(0);
+    })
+    .catch(function (err) {
+      setStatus(err.message || String(err));
+    });
+})();
