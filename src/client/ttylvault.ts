@@ -1,14 +1,16 @@
-import { appendFile, mkdir, open, readFile, readdir, stat, writeFile, type FileHandle } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, readdir, rm, stat, writeFile, type FileHandle } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { basename, extname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import {
+  DEFAULT_VAULT_THEME,
   TTYLVAULT_EVENTS_FILE,
   TTYLVAULT_MANIFEST_FILE,
   TTYLVAULT_TRANSCRIPT_FILE,
   type VaultEvent,
   type VaultManifest,
   type VaultPayload,
+  type VaultTheme,
 } from "../core/vault";
 
 export { TTYLVAULT_EVENTS_FILE, TTYLVAULT_MANIFEST_FILE, TTYLVAULT_TRANSCRIPT_FILE };
@@ -16,11 +18,13 @@ export { TTYLVAULT_EVENTS_FILE, TTYLVAULT_MANIFEST_FILE, TTYLVAULT_TRANSCRIPT_FI
 export interface TtylVaultCliArgs {
   vault: boolean;
   vaultOutput: string;
+  vaultRedact: string;
 }
 
 export interface TtylVaultSettings {
   enabled: boolean;
   dir: string;
+  redactPatterns: string[];
 }
 
 export interface TtylVaultSession {
@@ -36,6 +40,7 @@ export interface TtylVaultSession {
     fps: number;
     fontSize: number;
     fontFamily: string;
+    theme: VaultTheme;
   };
 }
 
@@ -80,11 +85,12 @@ export function resolveTtylVaultSettings(
 ): TtylVaultSettings {
   const requested = args.vault || args.vaultOutput.trim() !== "";
   if (!requested) {
-    return { enabled: false, dir: "" };
+    return { enabled: false, dir: "", redactPatterns: [] };
   }
   return {
     enabled: true,
     dir: resolve(args.vaultOutput || defaultTtylVaultDir(outputVideo)),
+    redactPatterns: args.vaultRedact.trim() ? [args.vaultRedact.trim()] : [],
   };
 }
 
@@ -111,10 +117,14 @@ export async function createTtylVaultWriter(
   if (!vault.enabled) {
     return NOOP_VAULT;
   }
+  const redactions = compileRedactions([
+    ...vault.redactPatterns,
+    ...(await readIgnoreRedactions(session.cwd)),
+  ]);
   await mkdir(vault.dir, { recursive: true, mode: 0o700 });
   const events = await open(join(vault.dir, TTYLVAULT_EVENTS_FILE), "w", 0o600);
   const transcript = await open(join(vault.dir, TTYLVAULT_TRANSCRIPT_FILE), "w", 0o600);
-  const writer = new FileTtylVaultWriter(vault.dir, events, transcript, session);
+  const writer = new FileTtylVaultWriter(vault.dir, events, transcript, session, redactions);
   await writer.start();
   return writer;
 }
@@ -124,6 +134,7 @@ export async function readVaultManifest(vaultDir: string): Promise<VaultManifest
   if (manifest.schemaVersion !== 1 || manifest.format !== "ttylvault") {
     throw new Error(`invalid ttylvault manifest at ${vaultDir}`);
   }
+  manifest.recording.theme ??= DEFAULT_VAULT_THEME;
   return manifest;
 }
 
@@ -156,6 +167,12 @@ export async function loadVaultPayload(vaultDir: string): Promise<VaultPayload> 
     events: await readVaultEvents(dir),
     transcript: await readVaultTranscript(dir),
   };
+}
+
+export async function removeVault(input: string): Promise<string> {
+  const dir = await findVault(input);
+  await rm(dir, { recursive: true, force: true });
+  return dir;
 }
 
 export function transcriptFromEvents(events: VaultEvent[]): string {
@@ -253,6 +270,7 @@ class FileTtylVaultWriter implements TtylVaultWriter {
     private readonly events: FileHandle,
     private readonly transcript: FileHandle,
     private readonly session: TtylVaultSession,
+    private readonly redactions: RegExp[],
   ) {}
 
   async start(): Promise<void> {
@@ -268,14 +286,17 @@ class FileTtylVaultWriter implements TtylVaultWriter {
 
   writeData(chunk: Buffer): void {
     const event = this.eventBase("data");
-    const transcript = sanitizeTranscript(chunk.toString("utf8"));
-    this.byteCount += chunk.byteLength;
+    const rawText = chunk.toString("utf8");
+    const redactedText = applyRedactions(rawText, this.redactions);
+    const redactedChunk = Buffer.from(redactedText, "utf8");
+    const transcript = sanitizeTranscript(redactedText);
+    this.byteCount += redactedChunk.byteLength;
     this.transcriptBytes += Buffer.byteLength(transcript);
     this.pending = this.pending.then(async () => {
       await this.writeEvent({
         ...event,
         encoding: "base64",
-        data: chunk.toString("base64"),
+        data: redactedChunk.toString("base64"),
       });
       if (transcript) {
         await this.transcript.write(transcript);
@@ -365,6 +386,7 @@ class FileTtylVaultWriter implements TtylVaultWriter {
         fps: this.session.recording.fps,
         fontSize: this.session.recording.fontSize,
         fontFamily: this.session.recording.fontFamily,
+        theme: this.session.recording.theme,
       },
       stats: {
         events: this.eventCount,
@@ -378,6 +400,33 @@ class FileTtylVaultWriter implements TtylVaultWriter {
     });
     return manifest;
   }
+}
+
+async function readIgnoreRedactions(cwd: string): Promise<string[]> {
+  try {
+    const text = await readFile(join(cwd, ".ttylvaultignore"), "utf8");
+    return text
+      .split(/\n/)
+      .map((line) => line.trim())
+      .filter((line) => line !== "" && !line.startsWith("#"));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw err;
+  }
+}
+
+function compileRedactions(patterns: string[]): RegExp[] {
+  return patterns.map((pattern) => new RegExp(pattern, "g"));
+}
+
+function applyRedactions(input: string, redactions: RegExp[]): string {
+  let output = input;
+  for (const redaction of redactions) {
+    output = output.replace(redaction, "[redacted]");
+  }
+  return output;
 }
 
 async function readRegistry(): Promise<VaultRegistryEntry[]> {

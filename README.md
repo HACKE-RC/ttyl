@@ -135,6 +135,7 @@ searchable transcript:
 
 ```bash
 ttyl record --vault --output demo.mp4 -- npm test
+ttyl record --vault --vault-redact 'token=[^ ]+' --output demo.mp4 -- npm test
 ```
 
 Archive a live stream:
@@ -148,15 +149,25 @@ Vault commands:
 ```bash
 ttyl vault list
 ttyl vault info <vault-id-or-path>
-ttyl vault search "failed"
+ttyl vault search "failed" --before 120 --after 120
 ttyl vault replay <vault-id-or-path> --speed 2
 ttyl vault export <vault-id-or-path> --format asciicast --output demo.cast
+ttyl vault rm <vault-id-or-path>
 ```
 
-Share a vault through a relay:
+Share, protect, and revoke a vault through a relay:
 
 ```bash
 ttyl vault share <vault-id-or-path> --server https://relay.example --lifetime 8h
+ttyl vault share <vault-id-or-path> --server https://relay.example --private
+ttyl vault revoke '<share-admin-link>'
+```
+
+Encrypt a local vault export:
+
+```bash
+ttyl vault encrypt <vault-id-or-path> --output demo.ttylvault.enc --passphrase '<passphrase>'
+ttyl vault decrypt demo.ttylvault.enc --output - --passphrase '<passphrase>'
 ```
 
 ## Relay Deployment

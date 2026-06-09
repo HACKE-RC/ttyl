@@ -6,6 +6,7 @@ import { WebSocket } from "ws";
 import { decode, encode, Kind } from "../core/wire";
 import { encodeAuthPayload } from "../core/auth";
 import { createTtylVaultWriter, resolveTtylVaultSettings, type TtylVaultCliArgs } from "./ttylvault";
+import { DEFAULT_RECORD_FONT_FAMILY, DEFAULT_RECORD_FONT_SIZE, DEFAULT_RECORD_THEME } from "./record-settings";
 import {
   DEFAULT_STREAM_COLS,
   DEFAULT_STREAM_ROWS,
@@ -90,8 +91,9 @@ export async function runStream(args: StreamArgs): Promise<void> {
     recording: {
       preset: "stream",
       fps: 0,
-      fontSize: 0,
-      fontFamily: "",
+      fontSize: DEFAULT_RECORD_FONT_SIZE,
+      fontFamily: DEFAULT_RECORD_FONT_FAMILY,
+      theme: DEFAULT_RECORD_THEME,
     },
   });
 

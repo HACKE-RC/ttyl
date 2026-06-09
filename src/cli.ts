@@ -17,8 +17,8 @@ Commands:
   serve    Run a relay server (Node)
 
 Flags:
-  stream [--server <url>] [--view-only] [--password] [--lifetime <30m|8h|2d|never>] [--size <80x24>] [--follow-terminal-size] [--vault] [--vault-output <dir>] [-- command...]
-  record [--preset <name>] [--output <file>] [--size <COLSxROWS>] [--fps <n>] [--font-size <px>] [--font-family <name>] [--vault] [--vault-output <dir>] [-- command...]
+  stream [--server <url>] [--view-only] [--password] [--lifetime <30m|8h|2d|never>] [--size <80x24>] [--follow-terminal-size] [--vault] [--vault-output <dir>] [--vault-redact <regex>] [-- command...]
+  record [--preset <name>] [--output <file>] [--size <COLSxROWS>] [--fps <n>] [--font-size <px>] [--font-family <name>] [--vault] [--vault-output <dir>] [--vault-redact <regex>] [-- command...]
   vault  <list|info|search|replay|export|share> ...
   stop   [<session-id>]
   admin  [<dashboard-link>] [--server <url>] [--id <id>] [--key <admin-key>]
@@ -42,6 +42,7 @@ async function main(): Promise<void> {
         followTerminalSize: flagBool(flags, "-follow-terminal-size", "--follow-terminal-size"),
         vault: flagBool(flags, "-vault", "--vault"),
         vaultOutput: flagValue(flags, "-vault-output", "--vault-output") ?? "",
+        vaultRedact: flagValue(flags, "-vault-redact", "--vault-redact") ?? "",
         command,
       });
       return;
@@ -62,6 +63,7 @@ async function main(): Promise<void> {
         fontFamily: flagValue(flags, "-font-family", "--font-family") ?? "",
         vault: flagBool(flags, "-vault", "--vault"),
         vaultOutput: flagValue(flags, "-vault-output", "--vault-output") ?? "",
+        vaultRedact: flagValue(flags, "-vault-redact", "--vault-redact") ?? "",
         command,
       });
       return;

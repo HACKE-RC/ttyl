@@ -39,6 +39,10 @@ class_name = "SessionRelay"
 name = "VAULT"
 class_name = "VaultArchive"
 
+[[r2_buckets]]
+binding = "VAULT_OBJECTS"
+bucket_name = "ttyl-vaults"
+
 # SQLite-backed Durable Objects are required on the Workers Free plan.
 [[migrations]]
 tag = "v1"

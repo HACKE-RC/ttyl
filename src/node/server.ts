@@ -5,6 +5,9 @@
 // session creation. Run with: npm run start  (PORT, SESSION_TTL_SECONDS env).
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { Relay, type Conn, type ConnMeta, type Role } from "../core/relay";
 import { hashPassword } from "../core/auth";
@@ -25,8 +28,11 @@ import {
   validateVaultPayload,
   vaultPayloadSize,
   VAULT_API_ITEM_PATH,
+  VAULT_API_EVENTS_PATH,
+  VAULT_API_TRANSCRIPT_PATH,
   VAULT_VIEW_PATH,
-  type VaultPayload,
+  type VaultManifest,
+  type VaultShareInfo,
 } from "../core/vault";
 import { flagValue } from "../args";
 import indexHtml from "../../web/index.html";
@@ -68,14 +74,31 @@ interface Session {
 }
 
 interface VaultRecord {
-  payload: VaultPayload;
+  id: string;
+  dir: string;
+  manifest: VaultManifest;
   expiresAt: number | null;
+  adminToken: string;
+  viewToken: string;
+  protected: boolean;
   ttlTimer: ReturnType<typeof setTimeout> | null;
 }
 
 const sessions = new Map<string, Session>();
 const vaults = new Map<string, VaultRecord>();
 const rateHits = new Map<string, number[]>();
+
+function dataDir(): string {
+  const root =
+    process.platform === "win32"
+      ? process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local")
+      : process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share");
+  return join(root, "ttyl", "hosted-vaults");
+}
+
+function vaultDir(id: string): string {
+  return join(dataDir(), id);
+}
 
 function clientIp(req: IncomingMessage): string {
   if (TRUST_PROXY) {
@@ -234,6 +257,13 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     return createVault(req, res, url);
   }
 
+  if (method === "DELETE") {
+    const vaultApiMatch = path.match(VAULT_API_ITEM_PATH);
+    if (vaultApiMatch) {
+      return deleteVault(req, res, vaultApiMatch[1]);
+    }
+  }
+
   if (method === "GET") {
     if (path === "/") {
       return secured(
@@ -274,18 +304,34 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     }
     const vaultMatch = path.match(VAULT_VIEW_PATH);
     if (vaultMatch) {
-      if (!liveVault(vaultMatch[1])) {
+      if (!(await liveVault(vaultMatch[1]))) {
         return secured(res, 404, CONTENT_TYPE.text, "vault not found");
       }
       return secured(res, 200, CONTENT_TYPE.html, ASSETS.vault);
     }
     const vaultApiMatch = path.match(VAULT_API_ITEM_PATH);
     if (vaultApiMatch) {
-      const record = liveVault(vaultApiMatch[1]);
-      if (!record) {
+      const record = await liveVault(vaultApiMatch[1]);
+      if (!record || !canViewVault(req, record)) {
         return secured(res, 404, CONTENT_TYPE.text, "vault not found");
       }
-      return secured(res, 200, CONTENT_TYPE.json, JSON.stringify(record.payload));
+      return secured(res, 200, CONTENT_TYPE.json, JSON.stringify(vaultInfo(record)));
+    }
+    const vaultEventsMatch = path.match(VAULT_API_EVENTS_PATH);
+    if (vaultEventsMatch) {
+      const record = await liveVault(vaultEventsMatch[1]);
+      if (!record || !canViewVault(req, record)) {
+        return secured(res, 404, CONTENT_TYPE.text, "vault not found");
+      }
+      return sendVaultFile(res, join(record.dir, "events.jsonl"), "application/x-ndjson; charset=utf-8");
+    }
+    const vaultTranscriptMatch = path.match(VAULT_API_TRANSCRIPT_PATH);
+    if (vaultTranscriptMatch) {
+      const record = await liveVault(vaultTranscriptMatch[1]);
+      if (!record || !canViewVault(req, record)) {
+        return secured(res, 404, CONTENT_TYPE.text, "vault not found");
+      }
+      return sendVaultFile(res, join(record.dir, "transcript.txt"), CONTENT_TYPE.text);
     }
   }
 
@@ -311,14 +357,38 @@ async function createVault(req: IncomingMessage, res: ServerResponse, url: URL):
     return secured(res, 400, CONTENT_TYPE.text, "invalid vault payload");
   }
   const id = newSessionID();
+  const adminToken = newSessionID();
+  const privateShare = url.searchParams.get("private") === "1";
+  const viewToken = privateShare ? newSessionID() : "";
   const ttl = resolveTtlSeconds(parseTtlParam(url.searchParams.get("ttl")), process.env.SESSION_TTL_SECONDS);
   const expiresAt = ttl <= 0 ? null : Date.now() + ttl * 1000;
-  const ttlTimer = expiresAt === null ? null : setTimeout(() => vaults.delete(id), ttl * 1000);
-  vaults.set(id, { payload, expiresAt, ttlTimer });
+  const dir = vaultDir(id);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await writeFile(join(dir, "manifest.json"), `${JSON.stringify(payload.manifest, null, 2)}\n`, { mode: 0o600 });
+  await writeFile(join(dir, "events.jsonl"), payload.events.map((event) => JSON.stringify(event)).join("\n") + "\n", {
+    mode: 0o600,
+  });
+  await writeFile(join(dir, "transcript.txt"), payload.transcript, { mode: 0o600 });
+  const record: VaultRecord = {
+    id,
+    dir,
+    manifest: payload.manifest,
+    expiresAt,
+    adminToken,
+    viewToken,
+    protected: privateShare,
+    ttlTimer: expiresAt === null ? null : setTimeout(() => void removeHostedVault(id), ttl * 1000),
+  };
+  await writeFile(join(dir, "share.json"), `${JSON.stringify(serializeVaultRecord(record), null, 2)}\n`, { mode: 0o600 });
+  vaults.set(id, record);
+  const link = `${requestOrigin(req)}/v/${id}${privateShare ? `#${viewToken}` : ""}`;
   const response = {
     id,
-    link: `${requestOrigin(req)}/v/${id}`,
+    link,
+    adminLink: `${requestOrigin(req)}/v/${id}#admin=${adminToken}`,
+    adminToken,
     expiresAt: expiresAt === null ? null : new Date(expiresAt).toISOString(),
+    protected: privateShare,
   };
   res.writeHead(200, {
     "Content-Type": CONTENT_TYPE.json,
@@ -328,17 +398,106 @@ async function createVault(req: IncomingMessage, res: ServerResponse, url: URL):
   res.end(JSON.stringify(response));
 }
 
-function liveVault(id: string): VaultRecord | undefined {
-  const record = vaults.get(id);
+async function deleteVault(req: IncomingMessage, res: ServerResponse, id: string): Promise<void> {
+  const record = await liveVault(id);
+  if (!record || !canAdminVault(req, record)) {
+    return secured(res, 404, CONTENT_TYPE.text, "vault not found");
+  }
+  await removeHostedVault(id);
+  return secured(res, 200, CONTENT_TYPE.json, JSON.stringify({ deleted: true }));
+}
+
+async function liveVault(id: string): Promise<VaultRecord | undefined> {
+  const record = vaults.get(id) ?? (await loadHostedVault(id));
   if (!record) {
     return undefined;
   }
   if (record.expiresAt !== null && Date.now() > record.expiresAt) {
-    if (record.ttlTimer) clearTimeout(record.ttlTimer);
-    vaults.delete(id);
+    await removeHostedVault(id);
     return undefined;
   }
   return record;
+}
+
+async function loadHostedVault(id: string): Promise<VaultRecord | undefined> {
+  try {
+    const dir = vaultDir(id);
+    const stored = JSON.parse(await readFile(join(dir, "share.json"), "utf8")) as Omit<VaultRecord, "ttlTimer">;
+    const manifest = JSON.parse(await readFile(join(dir, "manifest.json"), "utf8")) as VaultManifest;
+    const record: VaultRecord = {
+      ...stored,
+      dir,
+      manifest,
+      ttlTimer:
+        stored.expiresAt === null
+          ? null
+          : setTimeout(() => void removeHostedVault(id), Math.max(1, stored.expiresAt - Date.now())),
+    };
+    vaults.set(id, record);
+    return record;
+  } catch {
+    return undefined;
+  }
+}
+
+async function removeHostedVault(id: string): Promise<void> {
+  const record = vaults.get(id);
+  if (record?.ttlTimer) {
+    clearTimeout(record.ttlTimer);
+  }
+  vaults.delete(id);
+  await rm(vaultDir(id), { recursive: true, force: true });
+}
+
+async function sendVaultFile(res: ServerResponse, path: string, contentType: string): Promise<void> {
+  try {
+    const body = await readFile(path, "utf8");
+    secured(res, 200, contentType, body);
+  } catch {
+    secured(res, 404, CONTENT_TYPE.text, "vault not found");
+  }
+}
+
+function serializeVaultRecord(record: VaultRecord): Omit<VaultRecord, "ttlTimer"> {
+  return {
+    id: record.id,
+    dir: record.dir,
+    manifest: record.manifest,
+    expiresAt: record.expiresAt,
+    adminToken: record.adminToken,
+    viewToken: record.viewToken,
+    protected: record.protected,
+  };
+}
+
+function vaultInfo(record: VaultRecord): VaultShareInfo {
+  return {
+    id: record.id,
+    manifest: record.manifest,
+    expiresAt: record.expiresAt === null ? null : new Date(record.expiresAt).toISOString(),
+    protected: record.protected,
+  };
+}
+
+function canViewVault(req: IncomingMessage, record: VaultRecord): boolean {
+  if (!record.protected) {
+    return true;
+  }
+  const token = bearerToken(req);
+  return token === record.viewToken || token === record.adminToken;
+}
+
+function canAdminVault(req: IncomingMessage, record: VaultRecord): boolean {
+  return bearerToken(req) === record.adminToken;
+}
+
+function bearerToken(req: IncomingMessage): string {
+  const auth = req.headers.authorization;
+  if (typeof auth !== "string") {
+    return "";
+  }
+  const match = /^Bearer\s+(.+)$/i.exec(auth);
+  return match ? match[1] : "";
 }
 
 function requestOrigin(req: IncomingMessage): string {

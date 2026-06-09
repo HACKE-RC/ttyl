@@ -12,6 +12,8 @@
   var copyEl = document.getElementById("copy");
 
   var archive = null;
+  var events = [];
+  var eventsDone = false;
   var term = null;
   var index = 0;
   var playing = true;
@@ -33,11 +35,20 @@
     return bytes;
   }
 
+  function authHeaders() {
+    var token = decodeURIComponent((location.hash || "").replace(/^#/, ""));
+    if (token.indexOf("admin=") === 0) {
+      token = token.slice("admin=".length);
+    }
+    return token ? { Authorization: "Bearer " + token } : {};
+  }
+
   function bootTerminal() {
     if (term) {
       term.dispose();
     }
     var recording = archive.manifest.recording || {};
+    var theme = xtermTheme(recording.theme || {});
     term = new Terminal({
       cols: archive.manifest.terminal.cols,
       rows: archive.manifest.terminal.rows,
@@ -45,10 +56,7 @@
       cursorBlink: false,
       fontFamily: recording.fontFamily || DEFAULT_FONT_FAMILY,
       fontSize: recording.fontSize > 0 ? recording.fontSize : DEFAULT_FONT_SIZE,
-      theme: {
-        background: "#0b0e14",
-        foreground: "#c8d3f5",
-      },
+      theme: theme,
     });
     terminalEl.textContent = "";
     term.open(terminalEl);
@@ -64,6 +72,31 @@
     }
   }
 
+  function xtermTheme(theme) {
+    var ansi = Array.isArray(theme.ansi) ? theme.ansi : [];
+    return {
+      background: theme.background || "#0b0e14",
+      foreground: theme.foreground || "#c8d3f5",
+      cursor: theme.cursor || theme.foreground || "#c8d3f5",
+      black: ansi[0],
+      red: ansi[1],
+      green: ansi[2],
+      yellow: ansi[3],
+      blue: ansi[4],
+      magenta: ansi[5],
+      cyan: ansi[6],
+      white: ansi[7],
+      brightBlack: ansi[8],
+      brightRed: ansi[9],
+      brightGreen: ansi[10],
+      brightYellow: ansi[11],
+      brightBlue: ansi[12],
+      brightMagenta: ansi[13],
+      brightCyan: ansi[14],
+      brightWhite: ansi[15],
+    };
+  }
+
   function renderMeta() {
     var manifest = archive.manifest;
     var seconds = Math.max(0, Math.round(manifest.stats.durationMs / 1000));
@@ -73,11 +106,15 @@
 
   function scheduleNext(previousElapsed) {
     clearTimeout(timer);
+    timer = 0;
     if (!playing) {
       return;
     }
-    var events = archive.events;
     if (index >= events.length) {
+      if (!eventsDone) {
+        setStatus("loading");
+        return;
+      }
       setStatus("done");
       playEl.textContent = "Play";
       playing = false;
@@ -87,6 +124,7 @@
     var event = events[index];
     var delay = Math.max(0, event.elapsedMs - previousElapsed) / speed;
     timer = window.setTimeout(function () {
+      timer = 0;
       if (event.type === "data") {
         term.write(decodeBase64(event.data));
       } else if (event.type === "resize") {
@@ -110,7 +148,6 @@
     playing = !playing;
     playEl.textContent = playing ? "Pause" : "Play";
     if (playing) {
-      var events = archive.events;
       var previous = index > 0 && events[index - 1] ? events[index - 1].elapsedMs : 0;
       scheduleNext(previous);
     } else {
@@ -121,18 +158,31 @@
   restartEl.addEventListener("click", restart);
   speedEl.addEventListener("change", function () {
     if (playing) {
-      var events = archive.events;
       var previous = index > 0 && events[index - 1] ? events[index - 1].elapsedMs : 0;
       scheduleNext(previous);
     }
   });
   copyEl.addEventListener("click", function () {
-    navigator.clipboard.writeText(archive.transcript).then(function () {
-      setStatus("copied");
-    });
+    fetch("/api/vaults/" + encodeURIComponent(id) + "/transcript", {
+      cache: "no-store",
+      headers: authHeaders(),
+    })
+      .then(function (response) {
+        if (!response.ok) throw new Error("transcript not found");
+        return response.text();
+      })
+      .then(function (transcript) {
+        return navigator.clipboard.writeText(transcript);
+      })
+      .then(function () {
+        setStatus("copied");
+      })
+      .catch(function (err) {
+        setStatus(err.message || String(err));
+      });
   });
 
-  fetch("/api/vaults/" + encodeURIComponent(id), { cache: "no-store" })
+  fetch("/api/vaults/" + encodeURIComponent(id), { cache: "no-store", headers: authHeaders() })
     .then(function (response) {
       if (!response.ok) {
         throw new Error("vault not found");
@@ -144,9 +194,62 @@
       bootTerminal();
       renderMeta();
       setStatus("loading");
-      scheduleNext(0);
+      streamEvents();
     })
     .catch(function (err) {
       setStatus(err.message || String(err));
     });
+
+  function streamEvents() {
+    fetch("/api/vaults/" + encodeURIComponent(id) + "/events", {
+      cache: "no-store",
+      headers: authHeaders(),
+    })
+      .then(function (response) {
+        if (!response.ok) throw new Error("events not found");
+        if (!response.body || !response.body.getReader) {
+          return response.text().then(function (text) {
+            appendEventLines(text);
+            eventsDone = true;
+            scheduleNext(index > 0 && events[index - 1] ? events[index - 1].elapsedMs : 0);
+          });
+        }
+        var reader = response.body.getReader();
+        var decoder = new TextDecoder();
+        var pending = "";
+        function pump() {
+          return reader.read().then(function (result) {
+            if (result.done) {
+              appendEventLines(pending);
+              eventsDone = true;
+              scheduleNext(index > 0 && events[index - 1] ? events[index - 1].elapsedMs : 0);
+              return;
+            }
+            pending += decoder.decode(result.value, { stream: true });
+            var cut = pending.lastIndexOf("\n");
+            if (cut !== -1) {
+              appendEventLines(pending.slice(0, cut + 1));
+              pending = pending.slice(cut + 1);
+              if (playing && !timer) {
+                scheduleNext(index > 0 && events[index - 1] ? events[index - 1].elapsedMs : 0);
+              }
+            }
+            return pump();
+          });
+        }
+        return pump();
+      })
+      .catch(function (err) {
+        setStatus(err.message || String(err));
+      });
+  }
+
+  function appendEventLines(text) {
+    text
+      .split(/\n/)
+      .filter(Boolean)
+      .forEach(function (line) {
+        events.push(JSON.parse(line));
+      });
+  }
 })();

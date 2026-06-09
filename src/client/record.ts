@@ -28,6 +28,7 @@ export async function runRecord(args: RecordArgs): Promise<void> {
       fps: settings.fps,
       fontSize: settings.fontSize,
       fontFamily: settings.fontFamily,
+      theme: settings.theme,
     },
   });
   const renderOptions = createRenderOptions(settings);

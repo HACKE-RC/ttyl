@@ -25,8 +25,11 @@ import {
   validateVaultPayload,
   vaultPayloadSize,
   VAULT_API_ITEM_PATH,
+  VAULT_API_EVENTS_PATH,
+  VAULT_API_TRANSCRIPT_PATH,
   VAULT_VIEW_PATH,
-  type VaultPayload,
+  type VaultManifest,
+  type VaultShareInfo,
 } from "../core/vault";
 import indexHtml from "../../web/index.html";
 import adminHtml from "../../web/admin.html";
@@ -46,12 +49,17 @@ const KEY_LOCKED = "locked";
 const KEY_PWHASH = "pwhash";
 const KEY_PWSALT = "pwsalt";
 const KEY_PWITER = "pwiter";
-const KEY_VAULT_PAYLOAD = "payload";
+const KEY_VAULT_PREFIX = "prefix";
+const KEY_VAULT_MANIFEST = "manifest";
 const KEY_VAULT_EXPIRES = "expires";
+const KEY_VAULT_ADMIN = "admin-token";
+const KEY_VAULT_VIEW = "view-token";
+const KEY_VAULT_PROTECTED = "protected";
 
 export interface Env {
   SESSION: DurableObjectNamespace<SessionRelay>;
   VAULT: DurableObjectNamespace<VaultArchive>;
+  VAULT_OBJECTS: R2Bucket;
   SESSION_LIMITER?: RateLimit;
   SESSION_TTL_SECONDS?: string;
 }
@@ -311,21 +319,32 @@ export class SessionRelay extends DurableObject<Env> {
 }
 
 export class VaultArchive extends DurableObject<Env> {
-  async create(payload: VaultPayload, expiresAt: number | null): Promise<void> {
-    const existing = await this.ctx.storage.get(KEY_VAULT_PAYLOAD);
+  async create(meta: {
+    manifest: VaultManifest;
+    expiresAt: number | null;
+    adminToken: string;
+    viewToken: string;
+    protected: boolean;
+    prefix: string;
+  }): Promise<void> {
+    const existing = await this.ctx.storage.get(KEY_VAULT_PREFIX);
     if (existing !== undefined) {
       return;
     }
-    await this.ctx.storage.put(KEY_VAULT_PAYLOAD, payload);
-    await this.ctx.storage.put(KEY_VAULT_EXPIRES, expiresAt);
-    if (expiresAt !== null) {
-      await this.ctx.storage.setAlarm(expiresAt);
+    await this.ctx.storage.put(KEY_VAULT_PREFIX, meta.prefix);
+    await this.ctx.storage.put(KEY_VAULT_MANIFEST, meta.manifest);
+    await this.ctx.storage.put(KEY_VAULT_EXPIRES, meta.expiresAt);
+    await this.ctx.storage.put(KEY_VAULT_ADMIN, meta.adminToken);
+    await this.ctx.storage.put(KEY_VAULT_VIEW, meta.viewToken);
+    await this.ctx.storage.put(KEY_VAULT_PROTECTED, meta.protected);
+    if (meta.expiresAt !== null) {
+      await this.ctx.storage.setAlarm(meta.expiresAt);
     }
   }
 
   async exists(): Promise<boolean> {
-    const payload = await this.ctx.storage.get<VaultPayload>(KEY_VAULT_PAYLOAD);
-    if (!payload) {
+    const prefix = await this.ctx.storage.get<string>(KEY_VAULT_PREFIX);
+    if (!prefix) {
       return false;
     }
     const expiresAt = await this.ctx.storage.get<number | null>(KEY_VAULT_EXPIRES);
@@ -336,11 +355,42 @@ export class VaultArchive extends DurableObject<Env> {
     return true;
   }
 
-  async read(): Promise<VaultPayload | null> {
+  async info(token: string): Promise<VaultShareInfo | null> {
     if (!(await this.exists())) {
       return null;
     }
-    return (await this.ctx.storage.get<VaultPayload>(KEY_VAULT_PAYLOAD)) ?? null;
+    const manifest = await this.ctx.storage.get<VaultManifest>(KEY_VAULT_MANIFEST);
+    if (!manifest || !(await this.canView(token))) {
+      return null;
+    }
+    const expiresAt = await this.ctx.storage.get<number | null>(KEY_VAULT_EXPIRES);
+    return {
+      id: this.ctx.id.toString(),
+      manifest,
+      expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
+      protected: (await this.ctx.storage.get<boolean>(KEY_VAULT_PROTECTED)) === true,
+    };
+  }
+
+  async readFile(name: "events.jsonl" | "transcript.txt", token: string): Promise<string | null> {
+    if (!(await this.exists()) || !(await this.canView(token))) {
+      return null;
+    }
+    const prefix = await this.ctx.storage.get<string>(KEY_VAULT_PREFIX);
+    if (!prefix) {
+      return null;
+    }
+    const object = await this.env.VAULT_OBJECTS.get(`${prefix}/${name}`);
+    return object ? object.text() : null;
+  }
+
+  async revoke(token: string): Promise<boolean> {
+    const adminToken = await this.ctx.storage.get<string>(KEY_VAULT_ADMIN);
+    if (!adminToken || token !== adminToken) {
+      return false;
+    }
+    await this.clear();
+    return true;
   }
 
   override async alarm(): Promise<void> {
@@ -348,8 +398,33 @@ export class VaultArchive extends DurableObject<Env> {
   }
 
   private async clear(): Promise<void> {
-    await this.ctx.storage.delete([KEY_VAULT_PAYLOAD, KEY_VAULT_EXPIRES]);
+    const prefix = await this.ctx.storage.get<string>(KEY_VAULT_PREFIX);
+    if (prefix) {
+      await Promise.all([
+        this.env.VAULT_OBJECTS.delete(`${prefix}/manifest.json`),
+        this.env.VAULT_OBJECTS.delete(`${prefix}/events.jsonl`),
+        this.env.VAULT_OBJECTS.delete(`${prefix}/transcript.txt`),
+      ]);
+    }
+    await this.ctx.storage.delete([
+      KEY_VAULT_PREFIX,
+      KEY_VAULT_MANIFEST,
+      KEY_VAULT_EXPIRES,
+      KEY_VAULT_ADMIN,
+      KEY_VAULT_VIEW,
+      KEY_VAULT_PROTECTED,
+    ]);
     await this.ctx.storage.deleteAlarm();
+  }
+
+  private async canView(token: string): Promise<boolean> {
+    const protectedVault = (await this.ctx.storage.get<boolean>(KEY_VAULT_PROTECTED)) === true;
+    if (!protectedVault) {
+      return true;
+    }
+    const viewToken = await this.ctx.storage.get<string>(KEY_VAULT_VIEW);
+    const adminToken = await this.ctx.storage.get<string>(KEY_VAULT_ADMIN);
+    return token !== "" && (token === viewToken || token === adminToken);
   }
 }
 
@@ -368,6 +443,13 @@ export default {
 
     if (request.method === "POST" && path === "/api/vaults") {
       return createVault(request, env);
+    }
+
+    if (request.method === "DELETE") {
+      const vaultApiMatch = path.match(VAULT_API_ITEM_PATH);
+      if (vaultApiMatch) {
+        return revokeVault(request, env, vaultApiMatch[1]);
+      }
     }
 
     if (request.method === "GET") {
@@ -410,7 +492,17 @@ export default {
 
       const vaultApiMatch = path.match(VAULT_API_ITEM_PATH);
       if (vaultApiMatch) {
-        return vaultJson(env, vaultApiMatch[1]);
+        return vaultJson(env, vaultApiMatch[1], request);
+      }
+
+      const vaultEventsMatch = path.match(VAULT_API_EVENTS_PATH);
+      if (vaultEventsMatch) {
+        return vaultFile(request, env, vaultEventsMatch[1], "events.jsonl", "application/x-ndjson; charset=utf-8");
+      }
+
+      const vaultTranscriptMatch = path.match(VAULT_API_TRANSCRIPT_PATH);
+      if (vaultTranscriptMatch) {
+        return vaultFile(request, env, vaultTranscriptMatch[1], "transcript.txt", CONTENT_TYPE.text);
       }
 
       const wsMatch = path.match(WS_PATH);
@@ -473,12 +565,36 @@ async function createVault(request: Request, env: Env): Promise<Response> {
   }
 
   const id = newSessionID();
+  const adminToken = newSessionID();
+  const privateShare = new URL(request.url).searchParams.get("private") === "1";
+  const viewToken = privateShare ? newSessionID() : "";
   const ttl = resolveTtlSeconds(parseTtlParam(new URL(request.url).searchParams.get("ttl")), env.SESSION_TTL_SECONDS);
   const expiresAt = ttl <= 0 ? null : Date.now() + ttl * 1000;
+  const prefix = `vaults/${id}`;
+  await Promise.all([
+    env.VAULT_OBJECTS.put(`${prefix}/manifest.json`, JSON.stringify(payload.manifest, null, 2)),
+    env.VAULT_OBJECTS.put(`${prefix}/events.jsonl`, payload.events.map((event) => JSON.stringify(event)).join("\n") + "\n"),
+    env.VAULT_OBJECTS.put(`${prefix}/transcript.txt`, payload.transcript),
+  ]);
   const stub = env.VAULT.get(env.VAULT.idFromName(id));
-  await stub.create(payload, expiresAt);
-  const link = `${new URL(request.url).origin}/v/${id}`;
-  return new Response(JSON.stringify({ id, link, expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null }), {
+  await stub.create({
+    manifest: payload.manifest,
+    expiresAt,
+    adminToken,
+    viewToken,
+    protected: privateShare,
+    prefix,
+  });
+  const origin = new URL(request.url).origin;
+  const link = `${origin}/v/${id}${privateShare ? `#${viewToken}` : ""}`;
+  return new Response(JSON.stringify({
+    id,
+    link,
+    adminLink: `${origin}/v/${id}#admin=${adminToken}`,
+    adminToken,
+    expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
+    protected: privateShare,
+  }), {
     headers: {
       "Content-Type": CONTENT_TYPE.json,
       "Referrer-Policy": "no-referrer",
@@ -514,13 +630,36 @@ async function vaultPage(env: Env, id: string): Promise<Response> {
   return secured(vaultHtml, CONTENT_TYPE.html);
 }
 
-async function vaultJson(env: Env, id: string): Promise<Response> {
+async function vaultJson(env: Env, id: string, request?: Request): Promise<Response> {
   const stub = env.VAULT.get(env.VAULT.idFromName(id));
-  const payload = await stub.read();
-  if (!payload) {
+  const info = await stub.info(bearerToken(request));
+  if (!info) {
     return secured("vault not found", CONTENT_TYPE.text, 404);
   }
-  return secured(JSON.stringify(payload), CONTENT_TYPE.json);
+  return secured(JSON.stringify({ ...info, id }), CONTENT_TYPE.json);
+}
+
+async function vaultFile(
+  request: Request,
+  env: Env,
+  id: string,
+  name: "events.jsonl" | "transcript.txt",
+  contentType: string,
+): Promise<Response> {
+  const stub = env.VAULT.get(env.VAULT.idFromName(id));
+  const text = await stub.readFile(name, bearerToken(request));
+  if (text === null) {
+    return secured("vault not found", CONTENT_TYPE.text, 404);
+  }
+  return secured(text, contentType);
+}
+
+async function revokeVault(request: Request, env: Env, id: string): Promise<Response> {
+  const stub = env.VAULT.get(env.VAULT.idFromName(id));
+  if (!(await stub.revoke(bearerToken(request)))) {
+    return secured("vault not found", CONTENT_TYPE.text, 404);
+  }
+  return secured(JSON.stringify({ deleted: true }), CONTENT_TYPE.json);
 }
 
 async function websocket(env: Env, request: Request, id: string): Promise<Response> {
@@ -529,4 +668,10 @@ async function websocket(env: Env, request: Request, id: string): Promise<Respon
     return new Response("session not found", { status: 404 });
   }
   return stub.fetch(request);
+}
+
+function bearerToken(request: Request | undefined): string {
+  const auth = request?.headers.get("Authorization") ?? "";
+  const match = /^Bearer\s+(.+)$/i.exec(auth);
+  return match ? match[1] : "";
 }

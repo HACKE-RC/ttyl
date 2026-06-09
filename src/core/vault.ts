@@ -4,7 +4,42 @@ export const TTYLVAULT_TRANSCRIPT_FILE = "transcript.txt";
 
 export const VAULT_VIEW_PATH = /^\/v\/([^/]+)$/;
 export const VAULT_API_ITEM_PATH = /^\/api\/vaults\/([^/]+)$/;
-export const MAX_VAULT_UPLOAD_BYTES = 12 * 1024 * 1024;
+export const VAULT_API_EVENTS_PATH = /^\/api\/vaults\/([^/]+)\/events$/;
+export const VAULT_API_TRANSCRIPT_PATH = /^\/api\/vaults\/([^/]+)\/transcript$/;
+export const MAX_VAULT_UPLOAD_BYTES = 64 * 1024 * 1024;
+export const DEFAULT_VAULT_FONT_FAMILY =
+  "'JetBrains Mono', 'Symbols Nerd Font Mono', 'JetBrainsMono Nerd Font', 'JetBrainsMonoNL Nerd Font', 'Symbols Nerd Font', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+export const DEFAULT_VAULT_FONT_SIZE = 15;
+export const DEFAULT_VAULT_THEME: VaultTheme = {
+  foreground: "#c8d3f5",
+  background: "#0b0e14",
+  cursor: "#c8d3f5",
+  ansi: [
+    "#15161e",
+    "#f7768e",
+    "#9ece6a",
+    "#e0af68",
+    "#7aa2f7",
+    "#bb9af7",
+    "#7dcfff",
+    "#a9b1d6",
+    "#414868",
+    "#ff899d",
+    "#9fe044",
+    "#faba4a",
+    "#8db0ff",
+    "#c7a9ff",
+    "#a4daff",
+    "#c0caf5",
+  ],
+};
+
+export interface VaultTheme {
+  foreground: string;
+  background: string;
+  cursor: string;
+  ansi: string[];
+}
 
 export interface VaultManifest {
   schemaVersion: 1;
@@ -30,6 +65,7 @@ export interface VaultManifest {
     fps: number;
     fontSize: number;
     fontFamily: string;
+    theme: VaultTheme;
   };
   stats: {
     events: number;
@@ -54,10 +90,20 @@ export interface VaultPayload {
   transcript: string;
 }
 
+export interface VaultShareInfo {
+  id: string;
+  manifest: VaultManifest;
+  expiresAt: string | null;
+  protected: boolean;
+}
+
 export interface VaultCreateResponse {
   id: string;
   link: string;
+  adminLink: string;
+  adminToken: string;
   expiresAt: string | null;
+  protected: boolean;
 }
 
 export function validateVaultPayload(input: unknown): VaultPayload | null {
@@ -131,6 +177,7 @@ function readManifest(input: unknown): VaultManifest | null {
   ) {
     return null;
   }
+  const theme = readTheme(recording.theme) ?? DEFAULT_VAULT_THEME;
   if (
     !isObject(stats) ||
     !isNumber(stats.events) ||
@@ -162,6 +209,7 @@ function readManifest(input: unknown): VaultManifest | null {
       fps: recording.fps,
       fontSize: recording.fontSize,
       fontFamily: recording.fontFamily,
+      theme,
     },
     stats: {
       events: stats.events,
@@ -177,6 +225,28 @@ function readManifest(input: unknown): VaultManifest | null {
     manifest.exitCode = input.exitCode;
   }
   return manifest;
+}
+
+function readTheme(input: unknown): VaultTheme | null {
+  if (!isObject(input)) {
+    return null;
+  }
+  if (
+    typeof input.foreground !== "string" ||
+    typeof input.background !== "string" ||
+    typeof input.cursor !== "string" ||
+    !Array.isArray(input.ansi) ||
+    input.ansi.length < 16 ||
+    input.ansi.slice(0, 16).some((color) => typeof color !== "string")
+  ) {
+    return null;
+  }
+  return {
+    foreground: input.foreground,
+    background: input.background,
+    cursor: input.cursor,
+    ansi: input.ansi.slice(0, 16),
+  };
 }
 
 function readEvent(input: unknown): VaultEvent | null {
