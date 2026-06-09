@@ -16,6 +16,9 @@
   var index = 0;
   var playing = true;
   var timer = 0;
+  var DEFAULT_FONT_FAMILY =
+    '"JetBrains Mono", "Symbols Nerd Font Mono", "JetBrainsMono Nerd Font", "JetBrainsMonoNL Nerd Font", "Symbols Nerd Font", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+  var DEFAULT_FONT_SIZE = 15;
 
   function setStatus(text) {
     statusEl.textContent = text;
@@ -34,11 +37,14 @@
     if (term) {
       term.dispose();
     }
+    var recording = archive.manifest.recording || {};
     term = new Terminal({
       cols: archive.manifest.terminal.cols,
       rows: archive.manifest.terminal.rows,
       convertEol: false,
       cursorBlink: false,
+      fontFamily: recording.fontFamily || DEFAULT_FONT_FAMILY,
+      fontSize: recording.fontSize > 0 ? recording.fontSize : DEFAULT_FONT_SIZE,
       theme: {
         background: "#0b0e14",
         foreground: "#c8d3f5",
@@ -46,6 +52,16 @@
     });
     terminalEl.textContent = "";
     term.open(terminalEl);
+    if (document.fonts) {
+      document.fonts.ready.then(function () {
+        if (!term) {
+          return;
+        }
+        term.options.fontFamily = recording.fontFamily || DEFAULT_FONT_FAMILY;
+        term.options.fontSize = recording.fontSize > 0 ? recording.fontSize : DEFAULT_FONT_SIZE;
+        term.refresh(0, term.rows - 1);
+      });
+    }
   }
 
   function renderMeta() {
